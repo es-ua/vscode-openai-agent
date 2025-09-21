@@ -3,6 +3,7 @@ import { OpenAIService } from './services/openAIService';
 import { ConfigurationService } from './services/configurationService';
 import { EditorService } from './services/editorService';
 import { SuggestionService } from './services/suggestionService';
+import { ChatViewProvider } from './panels/chatViewProvider';
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OpenAI Agent extension is now active');
@@ -12,6 +13,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const openAIService = new OpenAIService(configService);
   const editorService = new EditorService();
   const suggestionService = new SuggestionService(openAIService, editorService);
+  const chatViewProvider = new ChatViewProvider(openAIService, context.extensionUri);
   
   // Register commands
   const enableCommand = vscode.commands.registerCommand('vscode-openai-agent.enable', () => {
@@ -75,7 +77,8 @@ export async function activate(context: vscode.ExtensionContext) {
     setApiKeyCommand,
     resetContextCommand,
     resetAssistantCommand,
-    completionProvider
+    completionProvider,
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatViewProvider)
   );
   
   if (inlineCompletionProvider) {

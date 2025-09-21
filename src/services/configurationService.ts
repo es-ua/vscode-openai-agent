@@ -22,7 +22,7 @@ export class ConfigurationService {
   }
   
   public getModel(): string {
-    return this.getConfiguration().get<string>('model') || 'gpt-4';
+    return this.getConfiguration().get<string>('model') || 'gpt-4o-mini';
   }
   
   public getMaxTokens(): number {

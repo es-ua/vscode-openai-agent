@@ -1,22 +1,24 @@
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 
 export class McpClient {
-  private proc: ChildProcessWithoutNullStreams | null = null;
+  private proc: ChildProcess | null = null;
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
 
   async start(workspaceDir: string): Promise<void> {
     if (this.proc) return;
     const serverPath = path.join(workspaceDir, 'mcp-server', 'server.js');
-    this.proc = spawn(process.execPath, [serverPath], {
+    const proc = spawn(process.execPath, [serverPath], {
       env: { ...process.env, WORKSPACE_DIR: workspaceDir },
       stdio: ['pipe', 'pipe', 'inherit']
     });
+    this.proc = proc;
 
     let buffer = '';
-    this.proc.stdout.setEncoding('utf8');
-    this.proc.stdout.on('data', (chunk: string) => {
+    if (!proc.stdout) throw new Error('Failed to start MCP server: no stdout');
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk: string) => {
       buffer += chunk;
       let idx;
       while ((idx = buffer.indexOf('\n')) >= 0) {
@@ -29,19 +31,22 @@ export class McpClient {
           const pending = this.pending.get(id);
           if (pending) {
             this.pending.delete(id);
-            if (error) pending.reject(new Error(error.message || 'MCP error'));
+            if (error) pending.reject(new Error((error && error.message) || 'MCP error'));
             else pending.resolve(result);
           }
-        } catch {}
+        } catch {
+          // ignore malformed lines
+        }
       }
     });
   }
 
   private request(method: string, params: any): Promise<any> {
-    if (!this.proc) throw new Error('MCP server not started');
+    const proc = this.proc;
+    if (!proc || !proc.stdin) throw new Error('MCP server not started');
     const id = this.nextId++;
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
-    this.proc.stdin.write(payload + '\n');
+    proc.stdin.write(payload + '\n');
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       setTimeout(() => {
@@ -62,7 +67,7 @@ export class McpClient {
   }
 
   dispose() {
-    this.proc?.kill();
+    try { this.proc?.kill(); } catch {}
     this.proc = null;
   }
 }
