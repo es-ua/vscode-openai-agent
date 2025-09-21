@@ -3,7 +3,7 @@
   "name": "vscode-openai-agent",
   "displayName": "OpenAI Agent",
   "description": "AI coding assistant powered by OpenAI Assistants API",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "engines": {
     "vscode": "^1.84.0"
   },
@@ -21,6 +21,7 @@
     "type": "git",
     "url": "https://github.com/es-ua/vscode-openai-agent"
   },
+  "homepage": "https://esso.dev",
   "contributes": {
     "commands": [
       {
