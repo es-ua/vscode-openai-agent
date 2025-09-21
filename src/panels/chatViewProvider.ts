@@ -74,11 +74,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.isProcessing = true;
         try {
           // Show initial thinking
-          this.sendMessage('thinking', { content: 'Analyzing your question...' });
+          webviewView.webview.postMessage({ type: 'thinking', content: 'Analyzing your question...' });
           
           const res = await this.openAI.chat(prompt, (thinkingStep: string) => {
             if (this.isProcessing) {
-              this.sendMessage('updateThinking', { content: thinkingStep });
+              webviewView.webview.postMessage({ type: 'updateThinking', content: thinkingStep });
             }
           });
           
