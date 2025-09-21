@@ -77,7 +77,9 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 
   const showPanelCommand = vscode.commands.registerCommand('vscode-openai-agent.showPanel', async () => {
-    await vscode.commands.executeCommand('openaiAgent.panelView.focus');
+    // First show the panel, then focus on our view
+    await vscode.commands.executeCommand('workbench.view.panel');
+    await vscode.commands.executeCommand('openaiAgent-panel.focus');
   });
 
   // Register completions provider

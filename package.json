@@ -180,16 +180,18 @@
           "name": "OpenAI Agent",
           "type": "webview",
           "contextualTitle": "OpenAI Agent",
-          "when": "true"
+          "when": "true",
+          "icon": "media/icon.svg"
         }
       ],
-      "panel": [
+      "openaiAgent-panel": [
         {
           "id": "openaiAgent.panelView",
-          "name": "OpenAI Agent",
+          "name": "✨[</>]",
           "type": "webview",
-          "contextualTitle": "OpenAI Agent",
-          "when": "true"
+          "contextualTitle": "✨[</>]",
+          "when": "true",
+          "icon": "media/icon.svg"
         }
       ]
     },
@@ -198,6 +200,13 @@
         {
           "id": "openaiAgent-sidebar",
           "title": "OpenAI Agent",
+          "icon": "media/icon.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "openaiAgent-panel",
+          "title": "✨[</>]",
           "icon": "media/icon.svg"
         }
       ]
