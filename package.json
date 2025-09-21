@@ -43,10 +43,6 @@
         "title": "OpenAI Agent: Reset Assistant"
       },
       {
-        "command": "vscode-openai-agent.toggleMode",
-        "title": "OpenAI Agent: Toggle Mode (Agent/Ask)"
-      },
-      {
         "command": "vscode-openai-agent.ask",
         "title": "Ask AI about code at cursor",
         "icon": "$(sparkle)"
@@ -212,13 +208,6 @@
       ]
     },
     "menus": {
-      "view/title": [
-        {
-          "command": "vscode-openai-agent.toggleMode",
-          "when": "view == openaiAgent.chatView || view == openaiAgent.panelView",
-          "group": "navigation@1"
-        }
-      ],
       "editor/title": [
         {
           "command": "vscode-openai-agent.ask",

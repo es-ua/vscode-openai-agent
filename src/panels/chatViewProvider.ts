@@ -146,6 +146,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } catch (error) {
           console.warn('Failed to cancel OpenAI run:', error);
         }
+      } else if (msg.type === 'setMode') {
+        // Call the setMode command
+        vscode.commands.executeCommand('vscode-openai-agent.setMode', msg.mode);
+        // Send mode change confirmation to the webview
+        webviewView.webview.postMessage({ type: 'modeChanged', mode: msg.mode });
       }
     });
   }
@@ -227,7 +232,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   #prompt { 
     flex: 1; 
-    padding: 10px 16px;
+    padding: 8px 16px;
     border: 1px solid var(--vscode-input-border);
     border-radius: 20px;
     background: var(--vscode-input-background);
@@ -237,8 +242,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     transition: all 0.2s ease;
     position: relative;
     resize: none;
-    min-height: 20px;
-    max-height: 120px;
+    min-height: 18px;
+    max-height: 36px;
     font-family: inherit;
     line-height: 1.4;
   }
@@ -295,6 +300,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   #form button:hover:not(:disabled) svg {
     transform: translateX(2px);
   }
+  #mode-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--vscode-editor-background);
+    border-top: 1px solid var(--vscode-panel-border);
+    font-size: 12px;
+    color: var(--vscode-foreground);
+  }
+  #mode-selector label {
+    font-weight: 500;
+    color: var(--vscode-descriptionForeground);
+  }
+  #mode-select {
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  #mode-select:focus {
+    border-color: var(--vscode-focusBorder);
+    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+  }
+  #mode-select:hover {
+    border-color: var(--vscode-input-border);
+  }
 </style>
 </head>
 <body>
@@ -313,6 +349,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       Send
     </button>
   </form>
+  <div id="mode-selector">
+    <label for="mode-select">Mode:</label>
+    <select id="mode-select">
+      <option value="agent">🤖 Agent (Auto-suggestions)</option>
+      <option value="ask">❓ Ask (Manual questions)</option>
+    </select>
+  </div>
   <script nonce="abc123">
     const vscode = acquireVsCodeApi();
     const messages = document.getElementById('messages');
@@ -320,6 +363,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const prompt = document.getElementById('prompt');
     const btnNew = document.getElementById('new');
     const tabs = document.getElementById('tabs');
+    const modeSelect = document.getElementById('mode-select');
     const clearIcon = '${clearIcon}';
     const deleteIcon = '${deleteIcon}';
 
@@ -582,6 +626,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         hideLoading();
         removeThinking();
         setFormEnabled(true);
+      } else if (msg.type === 'modeChanged') {
+        console.log('Mode changed to:', msg.mode);
+        // Update the select element to reflect the new mode
+        if (modeSelect) {
+          modeSelect.value = msg.mode;
+        }
       }
     });
 
@@ -613,6 +663,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ type:'newThread' });
     });
 
+    // Handle mode switching
+    modeSelect.addEventListener('change', (e) => {
+      const selectedMode = e.target.value;
+      vscode.postMessage({ type: 'setMode', mode: selectedMode });
+    });
+
     // Handle Enter and Ctrl+Enter for textarea
     prompt.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -637,7 +693,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     function autoResize() {
       prompt.style.height = 'auto';
       const scrollHeight = prompt.scrollHeight;
-      const maxHeight = 120; // max-height from CSS
+      const maxHeight = 36; // max-height from CSS (1.5 lines)
       prompt.style.height = Math.min(scrollHeight, maxHeight) + 'px';
     }
 

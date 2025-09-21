@@ -56,12 +56,6 @@ export async function activate(context: vscode.ExtensionContext) {
   });
   
   
-  const toggleModeCommand = vscode.commands.registerCommand('vscode-openai-agent.toggleMode', async () => {
-    const pick = await vscode.window.showQuickPick(['agent','ask'], { placeHolder: 'Select OpenAI Agent mode' });
-    if (!pick) return;
-    suggestionService.setMode(pick as any);
-    vscode.window.showInformationMessage(`OpenAI Agent mode: ${pick}`);
-  });
 
   const askCommand = vscode.commands.registerCommand('vscode-openai-agent.ask', async () => {
     suggestionService.setMode('ask');
@@ -80,6 +74,11 @@ export async function activate(context: vscode.ExtensionContext) {
     // First show the panel, then focus on our view
     await vscode.commands.executeCommand('workbench.view.panel');
     await vscode.commands.executeCommand('openaiAgent-panel.focus');
+  });
+
+  const setModeCommand = vscode.commands.registerCommand('vscode-openai-agent.setMode', async (mode: 'agent' | 'ask') => {
+    suggestionService.setMode(mode);
+    vscode.window.showInformationMessage(`OpenAI Agent mode: ${mode}`);
   });
 
   // Register completions provider
@@ -104,10 +103,10 @@ export async function activate(context: vscode.ExtensionContext) {
     setApiKeyCommand,
     resetContextCommand,
     resetAssistantCommand,
-    toggleModeCommand,
     askCommand,
     reloadMcpCommand,
     showPanelCommand,
+    setModeCommand,
     completionProvider,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatViewProvider),
     vscode.window.registerWebviewViewProvider(ChatViewProvider.panelViewId, chatViewProvider)
