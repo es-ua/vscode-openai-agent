@@ -16,6 +16,10 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/es-ua/vscode-openai-agent"
+  },
   "contributes": {
     "commands": [
       {
