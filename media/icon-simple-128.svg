@@ -1,0 +1,19 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="128" height="128" rx="20" fill="#007ACC"/>
+  
+  <!-- White brackets and symbols -->
+  <g fill="none" stroke="white" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Left bracket [ -->
+    <path d="M24 32h24M24 32v64M24 96h24"/>
+    <!-- Right bracket ] -->
+    <path d="M80 32h24M104 32v64M80 96h24"/>
+    
+    <!-- < symbol -->
+    <path d="M48 48L36 64l12 16"/>
+    <!-- / symbol -->
+    <path d="M72 48L64 80"/>
+    <!-- > symbol -->
+    <path d="M80 48L92 64l-12 16"/>
+  </g>
+</svg>

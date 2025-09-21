@@ -1,4 +1,5 @@
 {
+  "icon": "media/logo.png",
   "name": "vscode-openai-agent",
   "displayName": "OpenAI Agent",
   "description": "AI coding assistant powered by OpenAI Assistants API",

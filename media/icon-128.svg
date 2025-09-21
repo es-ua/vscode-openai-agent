@@ -1,0 +1,44 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gradient for modern look -->
+    <linearGradient id="bracketGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#007ACC;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#005A9E;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Gradient for symbols -->
+    <linearGradient id="symbolGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6B35;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F7931E;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Shadow filter -->
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#1E1E1E" stroke="url(#bracketGradient)" stroke-width="4"/>
+  
+  <!-- Outer square brackets [ ] -->
+  <g fill="none" stroke="url(#bracketGradient)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <!-- Left bracket [ -->
+    <path d="M24 32h24M24 32v64M24 96h24"/>
+    <!-- Right bracket ] -->
+    <path d="M80 32h24M104 32v64M80 96h24"/>
+  </g>
+  
+  <!-- Inner </> symbols -->
+  <g fill="none" stroke="url(#symbolGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <!-- < symbol -->
+    <path d="M48 48L36 64l12 16"/>
+    <!-- / symbol -->
+    <path d="M72 48L64 80"/>
+    <!-- > symbol -->
+    <path d="M80 48L92 64l-12 16"/>
+  </g>
+  
+  <!-- Additional decorative elements -->
+  <circle cx="64" cy="64" r="2" fill="url(#symbolGradient)" opacity="0.8"/>
+</svg>
