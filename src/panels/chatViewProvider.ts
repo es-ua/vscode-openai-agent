@@ -183,6 +183,61 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   .msg { padding: 6px 8px; margin: 6px 0; border-radius: 6px; white-space: pre-wrap; }
   .user { background: var(--vscode-editor-selectionBackground); }
   .assistant { background: var(--vscode-editorHoverWidget-background); }
+  .msg-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .msg-role {
+    font-weight: 600;
+    color: var(--vscode-textLink-foreground);
+    font-size: 0.9em;
+  }
+  .msg-text {
+    line-height: 1.5;
+  }
+  .msg-text strong {
+    font-weight: 600;
+    color: var(--vscode-foreground);
+  }
+  .msg-text em {
+    font-style: italic;
+    color: var(--vscode-descriptionForeground);
+  }
+  .msg-text code {
+    background: var(--vscode-textCodeBlock-background);
+    color: var(--vscode-textPreformat-foreground);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.9em;
+  }
+  .msg-text pre {
+    background: var(--vscode-textCodeBlock-background);
+    color: var(--vscode-textPreformat-foreground);
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 8px 0;
+    border: 1px solid var(--vscode-panel-border);
+  }
+  .msg-text pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+  }
+  .msg-text h1, .msg-text h2, .msg-text h3 {
+    margin: 12px 0 8px 0;
+    color: var(--vscode-foreground);
+  }
+  .msg-text h1 { font-size: 1.3em; }
+  .msg-text h2 { font-size: 1.2em; }
+  .msg-text h3 { font-size: 1.1em; }
+  .msg-text hr {
+    border: none;
+    border-top: 1px solid var(--vscode-panel-border);
+    margin: 12px 0;
+  }
   .thinking { 
     background: var(--vscode-editorWidget-background); 
     border: 1px solid var(--vscode-panel-border);
@@ -369,6 +424,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     let state = vscode.getState() || {}; if (!state.histories) state.histories = {}; if (typeof state.active === 'undefined') state.active = null;
 
+
     function setActive(id){ state.active = id; vscode.setState(state); }
 
     function renderTabs(info){
@@ -523,22 +579,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Make stopAI globally available
     window.stopAI = stopAI;
 
-    function renderHistory(){
+    function renderHistory(history = []){
       clearUI();
-      const hist = (state.active && state.histories[state.active]) ? state.histories[state.active] : [];
-      hist.forEach(m => append(m.role, m.content, false));
+      // History is passed from server, not from local state
+      history.forEach(m => append(m.role, m.content, false));
     }
 
     function append(role, content, save=true) {
       const el = document.createElement('div');
       el.className = 'msg ' + role;
-      el.textContent = (role === 'assistant' ? 'AI: ' : 'You: ') + content;
+      
+      // Use innerHTML to support basic HTML formatting
+      el.innerHTML = (role === 'assistant' ? '<strong>AI:</strong> ' : '<strong>You:</strong> ') + content;
       messages.appendChild(el);
       messages.scrollTop = messages.scrollHeight;
-      if (save && state.active){
-        (state.histories[state.active] = state.histories[state.active] || []).push({ role, content });
-        vscode.setState(state);
-      }
+      // Note: History is now stored on OpenAI server, not locally
+      // Local state is only used for UI state and thinking process
     }
 
     function appendThinking(content) {
@@ -604,19 +660,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const active = (msg.info && msg.info.active) || null;
         if (!active || !ids.includes(active)) { state.active = ids.length ? ids[ids.length-1] : null; vscode.setState(state); }
         renderTabs(msg.info);
-        // Show existing history immediately if available, otherwise show loading
-        if (state.active && state.histories[state.active]) {
-          renderHistory();
-        } else if (state.active) {
+        // Always load history from server
+        if (state.active) {
           showLoading('Loading chat history...', true);
         }
       } else if (msg.type === 'loadHistory') {
-        // Load history from server and update local state
+        // Load history from server
         hideLoading();
         if (state.active && msg.history) {
-          state.histories[state.active] = msg.history;
-          vscode.setState(state);
-          renderHistory();
+          renderHistory(msg.history);
         }
       } else if (msg.type === 'clear') {
         hideLoading();
