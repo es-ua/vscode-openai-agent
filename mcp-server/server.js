@@ -53,7 +53,42 @@ async function search_workspace(params) {
   return { root, query, results };
 }
 
-const handlers = { read_file, search_workspace };
+
+async function upsert_file(params) {
+  const full = resolvePath(params.path);
+  const dir = path.dirname(full);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const content = params.content ?? '';
+  await fs.promises.writeFile(full, content, 'utf8');
+  return { path: full, bytes: Buffer.byteLength(content, 'utf8'), status: 'ok' };
+}
+
+async function append_file(params) {
+  const full = resolvePath(params.path);
+  const dir = path.dirname(full);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const content = params.content ?? '';
+  await fs.promises.appendFile(full, content, 'utf8');
+  return { path: full, appended: Buffer.byteLength(content, 'utf8'), status: 'ok' };
+}
+
+async function make_dir(params) {
+  const full = resolvePath(params.path);
+  await fs.promises.mkdir(full, { recursive: true });
+  return { path: full, status: 'ok' };
+}
+
+async function delete_file(params) {
+  const full = resolvePath(params.path);
+  try {
+    await fs.promises.unlink(full);
+    return { path: full, status: 'ok' };
+  } catch (e) {
+    return { path: full, status: 'error', error: String(e) };
+  }
+}
+
+const handlers = { read_file, search_workspace, upsert_file, append_file, make_dir, delete_file };
 
 process.stdin.setEncoding('utf8');
 let buffer = '';

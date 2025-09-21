@@ -61,17 +61,43 @@ export class OpenAIService {
     }
 
     try {
-      const response = await this.client.post('/assistants', {
+      let response;
+      try {
+        response = await this.client.post('/assistants', {
         name: 'VS Code Coding Assistant',
         description: 'An AI assistant that helps with coding in VS Code',
         model: this.configService.getModel(),
         tools: [
           { type: 'code_interpreter' },
           { type: 'function', function: { name: 'read_file', description: 'Read a file from the workspace', parameters: { type: 'object', properties: { path: { type: 'string' }, maxBytes: { type: 'number' } }, required: ['path'] } } },
-          { type: 'function', function: { name: 'search_workspace', description: 'Search files in the workspace', parameters: { type: 'object', properties: { root: { type: 'string' }, includeGlobs: { type: 'array', items: { type: 'string' } }, excludeGlobs: { type: 'array', items: { type: 'string' } }, query: { type: 'string' }, maxMatches: { type: 'number' }, maxFileBytes: { type: 'number' } } } } }
+          { type: 'function', function: { name: 'search_workspace', description: 'Search files in the workspace', parameters: { type: 'object', properties: { root: { type: 'string' }, includeGlobs: { type: 'array', items: { type: 'string' } }, excludeGlobs: { type: 'array', items: { type: 'string' } }, query: { type: 'string' }, maxMatches: { type: 'number' }, maxFileBytes: { type: 'number' } } } } },
+          { type: 'function', function: { name: 'upsert_file', description: 'Create or overwrite a file with given content', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path','content'] } } },
+          { type: 'function', function: { name: 'append_file', description: 'Append content to a file (creates if missing)', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path','content'] } } },
+          { type: 'function', function: { name: 'make_dir', description: 'Create a directory (recursive)', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
+          { type: 'function', function: { name: 'delete_file', description: 'Delete a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }
         ],
         instructions: `You are an AI programming assistant embedded in VS Code.\nYour primary role is to help users write code by providing intelligent code completions and suggestions.\nAnalyze the code context provided and generate relevant, high-quality code completions.\nFocus on producing working, efficient, and idiomatic code in the language being used.\nWhen possible, follow the coding style evident in the existing code.\nKeep your responses focused on code completion unless specifically asked for explanations.`
       }, { headers: this.authHeaders(apiKey) });
+      } catch (e: any) {
+        const msg = e?.response?.data?.error?.message || '';
+        if (/cannot be used with the Assistants API/i.test(msg)) {
+          const fallbackModel = 'gpt-4o-mini';
+          response = await this.client.post('/assistants', {
+            name: 'VS Code Coding Assistant',
+            description: 'An AI assistant that helps with coding in VS Code',
+            model: fallbackModel,
+            tools: [
+              { type: 'code_interpreter' },
+              { type: 'function', function: { name: 'read_file', description: 'Read a file from the workspace', parameters: { type: 'object', properties: { path: { type: 'string' }, maxBytes: { type: 'number' } }, required: ['path'] } } },
+              { type: 'function', function: { name: 'search_workspace', description: 'Search files in the workspace', parameters: { type: 'object', properties: { root: { type: 'string' }, includeGlobs: { type: 'array', items: { type: 'string' } }, excludeGlobs: { type: 'array', items: { type: 'string' } }, query: { type: 'string' }, maxMatches: { type: 'number' }, maxFileBytes: { type: 'number' } } } } },
+              { type: 'function', function: { name: 'upsert_file', description: 'Create or overwrite a file with given content', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path','content'] } } },
+              { type: 'function', function: { name: 'append_file', description: 'Append content to a file (creates if missing)', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path','content'] } } },
+              { type: 'function', function: { name: 'make_dir', description: 'Create a directory (recursive)', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
+              { type: 'function', function: { name: 'delete_file', description: 'Delete a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }
+            ]
+          }, { headers: this.authHeaders(apiKey) });
+        } else { throw e; }
+      }
 
       const assistantId = response.data.id;
       this.configService.setAssistantId(assistantId);
@@ -145,6 +171,10 @@ export class OpenAIService {
               let result: any = null;
               if (name === 'read_file' && this.mcp) result = await this.mcp.readFile(args.path, args.maxBytes);
               else if (name === 'search_workspace' && this.mcp) result = await this.mcp.searchWorkspace(args);
+              else if (name === 'upsert_file' && this.mcp) result = await this.mcp.request('upsert_file', args);
+              else if (name === 'append_file' && this.mcp) result = await this.mcp.request('append_file', args);
+              else if (name === 'make_dir' && this.mcp) result = await this.mcp.request('make_dir', args);
+              else if (name === 'delete_file' && this.mcp) result = await this.mcp.request('delete_file', args);
               else result = { error: `Unknown tool: ${name}` };
               outputs.push({ tool_call_id: call.id, output: JSON.stringify(result).slice(0, 50000) });
             } catch (e: any) {

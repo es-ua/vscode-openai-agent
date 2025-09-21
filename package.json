@@ -37,6 +37,14 @@
       {
         "command": "vscode-openai-agent.resetAssistant",
         "title": "OpenAI Agent: Reset Assistant"
+      },
+      {
+        "command": "vscode-openai-agent.toggleMode",
+        "title": "OpenAI Agent: Toggle Mode (Agent/Ask)"
+      },
+      {
+        "command": "vscode-openai-agent.ask",
+        "title": "OpenAI Agent: Ask (at Cursor)"
       }
     ],
     "configuration": {
@@ -54,11 +62,7 @@
             "gpt-4o",
             "gpt-4o-mini",
             "gpt-4.1",
-            "gpt-4.1-mini",
-            "o3",
-            "o3-mini",
-            "gpt-5",
-            "gpt-5-mini"
+            "gpt-4.1-mini"
           ],
           "description": "OpenAI model to use for code suggestions"
         },
@@ -66,11 +70,20 @@
           "type": "number",
           "default": 1000,
           "description": "Maximum number of tokens for code completion"
+        },
+        "openaiAgent.mode": {
+          "type": "string",
+          "default": "agent",
+          "enum": [
+            "agent",
+            "ask"
+          ],
+          "description": "Interaction mode: agent (proactive inline completions) or ask (on-demand)"
         }
       }
     },
     "views": {
-      "secondarySideBar": [
+      "openaiAgent": [
         {
           "id": "openaiAgent.chatView",
           "name": "OpenAI Agent",
@@ -81,11 +94,26 @@
       ]
     },
     "viewsContainers": {
-      "secondarySideBar": [
+      "activitybar": [
         {
           "id": "openaiAgent",
           "title": "OpenAI Agent",
-          "icon": ""
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "vscode-openai-agent.toggleMode",
+          "when": "view == openaiAgent.chatView",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "vscode-openai-agent.ask",
+          "group": "navigation@9"
         }
       ]
     }

@@ -24,6 +24,11 @@ export class ConfigurationService {
   public getModel(): string {
     return this.getConfiguration().get<string>('model') || 'gpt-4o-mini';
   }
+
+  public getMode(): 'agent' | 'ask' {
+    const m = this.getConfiguration().get<string>('mode') || 'agent';
+    return (m === 'ask' ? 'ask' : 'agent');
+  }
   
   public getMaxTokens(): number {
     return this.getConfiguration().get<number>('maxTokens') || 1000;

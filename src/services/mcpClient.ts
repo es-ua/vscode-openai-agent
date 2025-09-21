@@ -41,7 +41,7 @@ export class McpClient {
     });
   }
 
-  private request(method: string, params: any): Promise<any> {
+  public request(method: string, params: any): Promise<any> {
     const proc = this.proc;
     if (!proc || !proc.stdin) throw new Error('MCP server not started');
     const id = this.nextId++;

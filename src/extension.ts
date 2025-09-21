@@ -55,7 +55,19 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage('OpenAI Assistant has been reset. It will be recreated on next use.');
   });
   
-  // Register completions provider
+  
+  const toggleModeCommand = vscode.commands.registerCommand('vscode-openai-agent.toggleMode', async () => {
+    const pick = await vscode.window.showQuickPick(['agent','ask'], { placeHolder: 'Select OpenAI Agent mode' });
+    if (!pick) return;
+    suggestionService.setMode(pick as any);
+    vscode.window.showInformationMessage(`OpenAI Agent mode: ${pick}`);
+  });
+
+  const askCommand = vscode.commands.registerCommand('vscode-openai-agent.ask', async () => {
+    suggestionService.setMode('ask');
+    await suggestionService.askAtCursor();
+  });
+// Register completions provider
   const completionProvider = vscode.languages.registerCompletionItemProvider(
     { pattern: '**' },
     suggestionService,
@@ -77,6 +89,8 @@ export async function activate(context: vscode.ExtensionContext) {
     setApiKeyCommand,
     resetContextCommand,
     resetAssistantCommand,
+    toggleModeCommand,
+    askCommand,
     completionProvider,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatViewProvider)
   );

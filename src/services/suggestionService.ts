@@ -3,6 +3,7 @@ import { OpenAIService } from './openAIService';
 import { EditorService } from './editorService';
 
 export class SuggestionService implements vscode.CompletionItemProvider {
+  private mode: "agent" | "ask" = "agent";
   private openAIService: OpenAIService;
   private editorService: EditorService;
   private isProcessing: boolean = false;
@@ -30,6 +31,7 @@ export class SuggestionService implements vscode.CompletionItemProvider {
       return null;
     }
     
+    if (this.mode !== "agent") { return null; }
     try {
       this.isProcessing = true;
       this.statusBarItem.text = "$(sync~spin) AI Thinking...";
@@ -140,5 +142,22 @@ export class SuggestionService implements vscode.CompletionItemProvider {
     } catch (error: any) {
       vscode.window.showErrorMessage(`Failed to reset context: ${error.message}`);
     }
+  }
+  public setMode(mode: "agent" | "ask") {
+    this.mode = mode;
+    this.statusBarItem.text = this.mode === 'agent' ? '$(sparkle) AI Ready' : '$(comment-discussion) Ask Mode';
+  }
+
+  public async askAtCursor(): Promise<void> {
+    const doc = this.editorService.getCurrentDocument();
+    if (!doc) return;
+    const before = this.editorService.getContextBeforeCursor(30);
+    if (!before.trim()) return;
+    const lang = doc.languageId;
+    const completion = await this.openAIService.getCompletion(before, lang);
+    if (!completion) return;
+    const editor = this.editorService.getActiveEditor();
+    if (!editor) return;
+    await editor.edit(edit => { edit.insert(editor.selection.active, completion); });
   }
 }
