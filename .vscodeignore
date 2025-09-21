@@ -1,0 +1,19 @@
+# Source files
+src/**
+tsconfig.json
+.vscode/**
+
+# Documentation
+Doc/**
+tasks.md
+*.md
+!README.md
+
+# Development files
+.gitignore
+vscode-openai-agent.code-workspace
+node_modules/**
+
+# Old packages (keep current version)
+vscode-openai-agent-0.1.0.vsix
+vscode-openai-agent-0.1.1.vsix

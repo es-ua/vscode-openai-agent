@@ -5,14 +5,23 @@
   "description": "AI coding assistant powered by OpenAI Assistants API",
   "version": "0.1.2",
   "engines": {
-    "vscode": "^1.84.0"
+    "vscode": "^1.60.0"
   },
   "categories": [
     "Other",
     "Programming Languages",
-    "Machine Learning",
     "Snippets"
   ],
+  "keywords": [
+    "ai",
+    "openai",
+    "assistant",
+    "coding",
+    "autocomplete",
+    "mcp",
+    "agent"
+  ],
+  "license": "MIT",
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -230,7 +239,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.8.10",
-    "@types/vscode": "^1.84.2",
+    "@types/vscode": "^1.60.0",
     "typescript": "^5.2.2"
   },
   "dependencies": {
