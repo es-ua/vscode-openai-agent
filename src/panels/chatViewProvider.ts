@@ -6,6 +6,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private openAI: OpenAIService;
   private extensionUri: vscode.Uri;
+  private isProcessing: boolean = false;
 
   constructor(openAI: OpenAIService, extensionUri: vscode.Uri) {
     this.openAI = openAI;
@@ -51,11 +52,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'sendPrompt') {
         const prompt: string = msg.prompt || '';
         if (!prompt.trim()) return;
+        
+        this.isProcessing = true;
         try {
           const res = await this.openAI.chat(prompt);
-          webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: res || '(no content)' });
+          if (this.isProcessing) { // Check if not stopped
+            webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: res || '(no content)' });
+            
+            // Auto-generate thread name from first message if thread is new
+            const info = this.openAI.getThreadInfo();
+            if (info.active && !info.threadNames[info.active]) {
+              const threadName = prompt.length > 20 ? prompt.substring(0, 20) + '...' : prompt;
+              await this.openAI.setThreadName(info.active, threadName);
+              await postThreads();
+            }
+          }
         } catch (e: any) {
-          webviewView.webview.postMessage({ type: 'error', message: e?.message || String(e) });
+          if (this.isProcessing) { // Check if not stopped
+            webviewView.webview.postMessage({ type: 'error', message: e?.message || String(e) });
+          }
+        } finally {
+          this.isProcessing = false;
         }
       } else if (msg.type === 'newThread') {
         await this.openAI.newThread();
@@ -64,9 +81,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // ask webview to clear UI for fresh chat
         webviewView.webview.postMessage({ type: 'clear' });
       } else if (msg.type === 'closeThread') {
-        const info = this.openAI.getThreadInfo();
-        if (info.active) {
-          await this.openAI.closeThread(info.active);
+        const threadId = msg.id;
+        if (threadId) {
+          await this.openAI.closeThread(threadId);
           try { await this.openAI.initialize(); } catch {}
           await postThreads();
           webviewView.webview.postMessage({ type: 'clear' });
@@ -76,6 +93,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         try { await this.openAI.initialize(); } catch {}
         await postThreads();
         webviewView.webview.postMessage({ type: 'clear' });
+      } else if (msg.type === 'setThreadName') {
+        await this.openAI.setThreadName(msg.id, msg.name);
+        await postThreads();
+      } else if (msg.type === 'stopAI') {
+        this.isProcessing = false;
+        // Note: We can't actually cancel the OpenAI API request, but we stop processing the response
       }
     });
   }
@@ -98,21 +121,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   .icon-btn:hover { background: var(--vscode-editorWidget-background); }
   .icon-btn img { width:16px; height:16px; display:block; }
   #tabs { margin-left:auto; font-size:11px; opacity:.85; display:flex; gap:6px; flex-wrap:wrap; }
-  .tab { padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-panel-border); cursor:pointer; }
+  .tab { padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-panel-border); cursor:pointer; display:flex; align-items:center; gap:4px; }
   .tab.active { background: var(--vscode-editorWidget-background); border-color: var(--vscode-editorWidget-border); }
+  .tab-actions { display:flex; gap:2px; }
+  .tab-btn { background:transparent; border:none; padding:1px 2px; cursor:pointer; border-radius:2px; }
+  .tab-btn:hover { background:var(--vscode-editorWidget-background); }
+  .tab-btn img { width:12px; height:12px; }
   #messages { flex: 1; overflow: auto; padding: 8px; }
   .msg { padding: 6px 8px; margin: 6px 0; border-radius: 6px; white-space: pre-wrap; }
   .user { background: var(--vscode-editor-selectionBackground); }
   .assistant { background: var(--vscode-editorHoverWidget-background); }
+  .loading { display: flex; align-items: center; justify-content: center; padding: 20px; color: var(--vscode-foreground); opacity: 0.7; }
+  .loading-spinner { width: 20px; height: 20px; border: 2px solid var(--vscode-panel-border); border-top: 2px solid var(--vscode-foreground); border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
+  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  .loading-text { font-size: 12px; }
+  .loading-stop { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border); border-radius: 4px; padding: 4px 8px; margin-left: 12px; cursor: pointer; font-size: 11px; }
+  .loading-stop:hover { background: var(--vscode-button-hoverBackground); }
   #form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--vscode-panel-border); }
   #prompt { flex: 1; }
+  #prompt:disabled { opacity: 0.5; cursor: not-allowed; }
+  #form button:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 </head>
 <body>
   <div id="toolbar">
     <button id="new" class="icon-btn" title="New"><img src="${addIcon}" alt="+"/></button>
-    <button id="clear" class="icon-btn" title="Clear"><img src="${clearIcon}" alt="x"/></button>
-    <button id="close" class="icon-btn" title="Close"><img src="${deleteIcon}" alt="-"/></button>
     <div id="tabs"></div>
   </div>
   <div id="messages"></div>
@@ -126,9 +159,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const form = document.getElementById('form');
     const prompt = document.getElementById('prompt');
     const btnNew = document.getElementById('new');
-    const btnClear = document.getElementById('clear');
-    const btnClose = document.getElementById('close');
     const tabs = document.getElementById('tabs');
+    const clearIcon = '${clearIcon}';
+    const deleteIcon = '${deleteIcon}';
 
     let state = vscode.getState() || {}; if (!state.histories) state.histories = {}; if (typeof state.active === 'undefined') state.active = null;
 
@@ -136,17 +169,120 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     function renderTabs(info){
       tabs.innerHTML='';
+      
+      if (!info || !info.threads || info.threads.length === 0) {
+        return;
+      }
+      
       (info.threads||[]).forEach(id => {
         const el = document.createElement('div');
         el.className = 'tab' + (id === info.active ? ' active' : '');
-        el.textContent = id.slice(0,6);
-        el.onclick = () => { vscode.postMessage({ type:'switchThread', id }); };
+        
+        // Show thread name if available, otherwise show first 6 chars of ID
+        const threadName = (info.threadNames && info.threadNames[id]) || id.slice(0,6);
+        
+        // Create tab content
+        const tabContent = document.createElement('span');
+        tabContent.textContent = threadName;
+        tabContent.title = 'Thread: ' + id;
+        
+        // Create actions container
+        const actions = document.createElement('div');
+        actions.className = 'tab-actions';
+        
+        // Clear button
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'tab-btn';
+        clearBtn.title = 'Clear thread';
+        clearBtn.innerHTML = '<img src="' + clearIcon + '" alt="Clear"/>';
+        clearBtn.onclick = function(e) { 
+          e.stopPropagation(); 
+          if (state.active === id) {
+            state.histories[id] = []; 
+            vscode.setState(state); 
+            clearUI(); 
+          }
+        };
+        
+        // Close button
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'tab-btn';
+        closeBtn.title = 'Close thread';
+        closeBtn.innerHTML = '<img src="' + deleteIcon + '" alt="Close"/>';
+        closeBtn.onclick = function(e) { 
+          e.stopPropagation(); 
+          vscode.postMessage({ type:'closeThread', id: id }); 
+        };
+        
+        // Add elements to tab
+        actions.appendChild(clearBtn);
+        actions.appendChild(closeBtn);
+        el.appendChild(tabContent);
+        el.appendChild(actions);
+        
+        // Tab click handler
+        el.onclick = function() { 
+          showLoading('Switching to thread...', true);
+          vscode.postMessage({ type:'switchThread', id: id }); 
+        };
+        el.addEventListener('dblclick', function() { 
+          var newName = prompt('Enter thread name:', threadName);
+          if (newName && newName.trim()) {
+            vscode.postMessage({ type:'setThreadName', id: id, name: newName.trim() });
+          }
+        });
+        
         tabs.appendChild(el);
       });
       setActive(info.active || null);
     }
 
     function clearUI(){ messages.innerHTML=''; }
+
+    function showLoading(text = 'Loading chat history...', showStopButton = false, blockForm = false) {
+      clearUI();
+      const loadingEl = document.createElement('div');
+      loadingEl.className = 'loading';
+      
+      let stopButtonHtml = '';
+      if (showStopButton) {
+        stopButtonHtml = '<button class="loading-stop" onclick="stopAI()">Stop</button>';
+      }
+      
+      loadingEl.innerHTML = '<div class="loading-spinner"></div><span class="loading-text">' + text + '</span>' + stopButtonHtml;
+      messages.appendChild(loadingEl);
+      
+      if (blockForm) {
+        setFormEnabled(false);
+      }
+    }
+
+    function hideLoading() {
+      const loadingEl = messages.querySelector('.loading');
+      if (loadingEl) {
+        loadingEl.remove();
+      }
+      setFormEnabled(true);
+    }
+
+    function stopAI() {
+      hideLoading();
+      vscode.postMessage({ type: 'stopAI' });
+      append('assistant', 'Operation stopped by user', true);
+    }
+
+    function setFormEnabled(enabled) {
+      const prompt = document.getElementById('prompt');
+      const submitBtn = document.querySelector('#form button[type="submit"]');
+      if (prompt) {
+        prompt.disabled = !enabled;
+        prompt.placeholder = enabled ? 'Ask the OpenAI Agent...' : 'AI is thinking, please wait...';
+      }
+      if (submitBtn) submitBtn.disabled = !enabled;
+    }
+
+    // Make stopAI globally available
+    window.stopAI = stopAI;
 
     function renderHistory(){
       clearUI();
@@ -169,26 +305,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type === 'append') {
+        hideLoading();
         append(msg.role, msg.content, true);
       } else if (msg.type === 'error') {
+        hideLoading();
         append('assistant', 'Error: ' + msg.message, true);
       } else if (msg.type === 'threads') {
         const ids = (msg.info && msg.info.threads) || [];
         const active = (msg.info && msg.info.active) || null;
         if (!active || !ids.includes(active)) { state.active = ids.length ? ids[ids.length-1] : null; vscode.setState(state); }
         renderTabs(msg.info);
-        // Show existing history immediately if available
+        // Show existing history immediately if available, otherwise show loading
         if (state.active && state.histories[state.active]) {
           renderHistory();
+        } else if (state.active) {
+          showLoading('Loading chat history...', true);
         }
       } else if (msg.type === 'loadHistory') {
         // Load history from server and update local state
+        hideLoading();
         if (state.active && msg.history) {
           state.histories[state.active] = msg.history;
           vscode.setState(state);
           renderHistory();
         }
       } else if (msg.type === 'clear') {
+        hideLoading();
         clearUI();
       }
     });
@@ -197,14 +339,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       e.preventDefault();
       const value = prompt.value || '';
       if (!value.trim()) return;
-      prompt.value = '';
-      append('user', value);
-      vscode.postMessage({ type: 'sendPrompt', prompt: value });
+      
+      // If already processing, stop current operation and start new one
+      if (document.querySelector('.loading')) {
+        stopAI();
+        // Small delay to ensure stop is processed
+        setTimeout(() => {
+          prompt.value = '';
+          append('user', value);
+          showLoading('AI is thinking...', true, true);
+          vscode.postMessage({ type: 'sendPrompt', prompt: value });
+        }, 100);
+      } else {
+        prompt.value = '';
+        append('user', value);
+        showLoading('AI is thinking...', true, true);
+        vscode.postMessage({ type: 'sendPrompt', prompt: value });
+      }
     });
 
-    btnNew.addEventListener('click', () => vscode.postMessage({ type:'newThread' }));
-    btnClear.addEventListener('click', () => { if (state.active){ state.histories[state.active] = []; vscode.setState(state); clearUI(); } });
-    btnClose.addEventListener('click', () => vscode.postMessage({ type:'closeThread' }));
+    btnNew.addEventListener('click', () => {
+      showLoading('Creating new thread...');
+      vscode.postMessage({ type:'newThread' });
+    });
   </script>
 </body>
 </html>`;

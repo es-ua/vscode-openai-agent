@@ -7,6 +7,7 @@ export class ConfigurationService {
   private readonly THREAD_ID_KEY = 'openai-thread-id';
   private readonly THREADS_KEY = 'openai-threads';
   private readonly ACTIVE_THREAD_KEY = 'openai-active-thread';
+  private readonly THREAD_NAMES_KEY = 'openai-thread-names';
   
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -83,5 +84,19 @@ export class ConfigurationService {
 
   public setActiveThreadId(id: string): Thenable<void> {
     return this.context.globalState.update(this.ACTIVE_THREAD_KEY, id);
+  }
+
+  public getThreadNames(): { [threadId: string]: string } {
+    return this.context.globalState.get<{ [threadId: string]: string }>(this.THREAD_NAMES_KEY) || {};
+  }
+
+  public setThreadName(threadId: string, name: string): Thenable<void> {
+    const names = this.getThreadNames();
+    names[threadId] = name;
+    return this.context.globalState.update(this.THREAD_NAMES_KEY, names);
+  }
+
+  public getThreadName(threadId: string): string | undefined {
+    return this.getThreadNames()[threadId];
   }
 }

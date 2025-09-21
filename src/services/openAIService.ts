@@ -233,7 +233,13 @@ export class OpenAIService {
 
 
   public getThreadInfo() {
-    return { threads: this.configService.getThreads(), active: this.configService.getActiveThreadId() || this.threadId };
+    const threads = this.configService.getThreads();
+    const threadNames = this.configService.getThreadNames();
+    return { 
+      threads, 
+      active: this.configService.getActiveThreadId() || this.threadId,
+      threadNames 
+    };
   }
 
   public async getThreadHistory(threadId: string): Promise<Array<{role: string, content: string}>> {
@@ -282,6 +288,10 @@ export class OpenAIService {
     this.threadId = id;
     await this.configService.setActiveThreadId(id);
     await this.configService.setThreadId(id);
+  }
+
+  public async setThreadName(threadId: string, name: string): Promise<void> {
+    await this.configService.setThreadName(threadId, name);
   }
 
   public async newThread(): Promise<string> {
