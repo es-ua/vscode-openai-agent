@@ -49,6 +49,10 @@
       {
         "command": "vscode-openai-agent.ask",
         "title": "OpenAI Agent: Ask (at Cursor)"
+      },
+      {
+        "command": "vscode-openai-agent.reloadMcp",
+        "title": "OpenAI Agent: Reload MCP Servers"
       }
     ],
     "configuration": {
@@ -83,6 +87,64 @@
             "ask"
           ],
           "description": "Interaction mode: agent (proactive inline completions) or ask (on-demand)"
+        },
+        "openaiAgent.mcp.servers": {
+          "type": "array",
+          "default": [],
+          "description": "External MCP servers to launch and expose as tools",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "tools": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "parameters": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "command"
+            ]
+          }
         }
       }
     },

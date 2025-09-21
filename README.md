@@ -57,3 +57,29 @@ This extension contributes the following settings:
 ## License
 
 This extension is licensed under the MIT License.
+
+
+## External MCP servers
+
+Configure in settings (settings.json):
+```json
+"openaiAgent.mcp.servers": [
+  {
+    "id": "my-tools",
+    "command": "/usr/local/bin/my-mcp",
+    "args": ["--stdio"],
+    "cwd": "${workspaceFolder}",
+    "env": { "FOO": "bar" },
+    "tools": [
+      {
+        "name": "search",
+        "method": "search",  
+        "description": "Search text",
+        "parameters": { "type": "object", "properties": { "q": { "type": "string" } }, "required": ["q"] }
+      }
+    ]
+  }
+]
+```
+- Инструменты будут доступны ассистенту как `mcp:my-tools:search`.
+- Команда для перезапуска: `OpenAI Agent: Reload MCP Servers`.

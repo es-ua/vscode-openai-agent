@@ -62,6 +62,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <script nonce="abc123">
     const vscode = acquireVsCodeApi();
     const messages = document.getElementById('messages');
+    const state = vscode.getState() || { history: [] };
+    for (const m of state.history) { append(m.role, m.content); }
     const form = document.getElementById('form');
     const prompt = document.getElementById('prompt');
 
@@ -77,6 +79,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const msg = event.data;
       if (msg.type === 'append') {
         append(msg.role, msg.content);
+        state.history.push({ role: msg.role, content: msg.content });
+        vscode.setState(state);
       } else if (msg.type === 'error') {
         append('assistant', 'Error: ' + msg.message);
       }
@@ -87,6 +91,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const value = prompt.value || '';
       prompt.value = '';
       vscode.postMessage({ type: 'sendPrompt', prompt: value });
+      state.history.push({ role: 'user', content: value });
+      vscode.setState(state);
     });
   </script>
 </body>

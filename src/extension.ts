@@ -67,7 +67,16 @@ export async function activate(context: vscode.ExtensionContext) {
     suggestionService.setMode('ask');
     await suggestionService.askAtCursor();
   });
-// Register completions provider
+const reloadMcpCommand = vscode.commands.registerCommand('vscode-openai-agent.reloadMcp', async () => {
+    try {
+      await openAIService.initialize();
+      vscode.window.showInformationMessage('MCP servers reloaded');
+    } catch (e: any) {
+      vscode.window.showErrorMessage('Failed to reload MCP servers: ' + (e?.message || e));
+    }
+  });
+
+  // Register completions provider
   const completionProvider = vscode.languages.registerCompletionItemProvider(
     { pattern: '**' },
     suggestionService,
@@ -91,6 +100,7 @@ export async function activate(context: vscode.ExtensionContext) {
     resetAssistantCommand,
     toggleModeCommand,
     askCommand,
+    reloadMcpCommand,
     completionProvider,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatViewProvider)
   );
