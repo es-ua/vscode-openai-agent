@@ -148,7 +148,7 @@ export class OpenAIService {
     }
   }
 
-  public async chat(userMessage: string): Promise<string> {
+  public async chat(userMessage: string, onThinking?: (step: string) => void): Promise<string> {
     const apiKey = await this.configService.getApiKey();
     if (!apiKey || !this.assistantId || !this.threadId) {
       await this.initialize();
@@ -158,13 +158,13 @@ export class OpenAIService {
       await this.client.post(`/threads/${this.threadId}/messages`, { role: 'user', content: [{ type: 'text', text: userMessage }] }, { headers: this.authHeaders(apiKey) });
       const runResponse = await this.client.post(`/threads/${this.threadId}/runs`, { assistant_id: this.assistantId }, { headers: this.authHeaders(apiKey) });
       const runId = runResponse.data.id;
-      return await this.waitForRunCompletion(apiKey, runId);
+      return await this.waitForRunCompletion(apiKey, runId, onThinking);
     } catch (e: any) {
       throw new Error(e?.message || String(e));
     }
   }
 
-  private async waitForRunCompletion(apiKey: string, runId: string): Promise<string> {
+  private async waitForRunCompletion(apiKey: string, runId: string, onThinking?: (step: string) => void): Promise<string> {
     const maxAttempts = 60;
     const delayMs = 1000;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -174,9 +174,27 @@ export class OpenAIService {
         if (status === 'requires_action') {
           const toolCalls = response.data.required_action?.submit_tool_outputs?.tool_calls || [];
           const outputs: Array<{ tool_call_id: string; output: string }> = [];
+          
+          if (onThinking && toolCalls.length > 0) {
+            onThinking(`AI decided to use tools: ${toolCalls.map((call: any) => call.function?.name).join(', ')}`);
+          }
+          
           for (const call of toolCalls) {
             const name = call.function?.name;
             const args = call.function?.arguments ? JSON.parse(call.function.arguments) : {};
+            
+            if (onThinking) {
+              let toolDescription = `Executing ${name}`;
+              if (name === 'read_file' && args.path) {
+                toolDescription += ` - reading file: ${args.path}`;
+              } else if (name === 'search_workspace' && args.query) {
+                toolDescription += ` - searching for: "${args.query}"`;
+              } else if (name === 'upsert_file' && args.path) {
+                toolDescription += ` - writing to file: ${args.path}`;
+              }
+              onThinking(toolDescription);
+            }
+            
             try {
               let result: any = null;
               if (name === 'read_file' && this.mcp) result = await this.mcp.readFile(args.path, args.maxBytes);
@@ -191,11 +209,63 @@ export class OpenAIService {
               outputs.push({ tool_call_id: call.id, output: JSON.stringify({ error: e?.message || String(e) }) });
             }
           }
+          
+          if (onThinking) {
+            onThinking('Processing tool results...');
+          }
+          
           await this.client.post(`/threads/${this.threadId}/runs/${runId}/submit_tool_outputs`, { tool_outputs: outputs }, { headers: this.authHeaders(apiKey) });
         } else if (status === 'completed') {
+          if (onThinking) {
+            onThinking('Generating final response...');
+          }
           return await this.getLastAssistantMessage(apiKey);
         } else if (status === 'failed' || status === 'cancelled' || status === 'expired') {
           throw new Error(`Run ${status}: ${response.data.last_error?.message || 'Unknown error'}`);
+        } else if (status === 'in_progress' || status === 'queued') {
+          if (onThinking) {
+            // Get more detailed status information
+            const runDetails = response.data;
+            let thinkingText = `Processing... (${status})`;
+            
+            if (runDetails.required_action) {
+              thinkingText = `AI is deciding what tools to use...`;
+            } else if (runDetails.last_error) {
+              thinkingText = `Error occurred: ${runDetails.last_error.message}`;
+            } else if (runDetails.started_at && !runDetails.completed_at) {
+              const elapsed = Math.floor((Date.now() - new Date(runDetails.started_at).getTime()) / 1000);
+              thinkingText = `AI is thinking... (${elapsed}s elapsed)`;
+            }
+            
+            onThinking(thinkingText);
+          }
+          
+          // Try to get intermediate messages to show thinking process
+          if (onThinking && status === 'in_progress') {
+            try {
+              const messagesResponse = await this.client.get(`/threads/${this.threadId}/messages`, { 
+                params: { limit: 5, order: 'desc' }, 
+                headers: this.authHeaders(apiKey) 
+              });
+              
+              if (messagesResponse.data.data && messagesResponse.data.data.length > 0) {
+                const lastMessage = messagesResponse.data.data[0];
+                if (lastMessage.role === 'assistant' && lastMessage.content) {
+                  let thinkingText = '';
+                  for (const contentItem of lastMessage.content) {
+                    if (contentItem.type === 'text') {
+                      thinkingText += contentItem.text.value;
+                    }
+                  }
+                  if (thinkingText.trim() && thinkingText.length > 10) {
+                    onThinking(`AI reasoning: ${thinkingText.substring(0, 200)}${thinkingText.length > 200 ? '...' : ''}`);
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore errors when trying to get intermediate messages
+            }
+          }
         }
         await new Promise(resolve => setTimeout(resolve, delayMs));
       } catch (error: any) {
@@ -282,6 +352,10 @@ export class OpenAIService {
       console.error('Error retrieving thread history:', error.response?.data || error.message);
       throw new Error(`Failed to retrieve thread history: ${error.response?.data?.error?.message || error.message}`);
     }
+  }
+
+  public getActiveThreadId(): string | undefined {
+    return this.configService.getActiveThreadId();
   }
 
   public async setActiveThread(id: string): Promise<void> {

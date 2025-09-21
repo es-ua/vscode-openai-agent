@@ -13,6 +13,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.extensionUri = extensionUri;
   }
 
+  private sendMessage(type: string, data: any) {
+    if (this._view) {
+      this._view.webview.postMessage({ type, ...data });
+    }
+  }
+
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
     this._view = webviewView;
     webviewView.webview.options = {
@@ -44,7 +50,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await postThreads();
 
     webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) postThreads();
+      if (webviewView.visible) {
+        postThreads();
+      }
     });
 
     webviewView.webview.onDidReceiveMessage(async msg => {
@@ -55,26 +63,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         
         this.isProcessing = true;
         try {
-          const res = await this.openAI.chat(prompt);
-          if (this.isProcessing) { // Check if not stopped
-            webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: res || '(no content)' });
-            
-            // Auto-generate thread name from first message if thread is new
-            const info = this.openAI.getThreadInfo();
-            if (info.active && !info.threadNames[info.active]) {
-              const threadName = prompt.length > 20 ? prompt.substring(0, 20) + '...' : prompt;
-              await this.openAI.setThreadName(info.active, threadName);
-              await postThreads();
+          // Show initial thinking
+          this.sendMessage('thinking', { content: 'Analyzing your question...' });
+          
+          const res = await this.openAI.chat(prompt, (thinkingStep: string) => {
+            if (this.isProcessing) {
+              this.sendMessage('updateThinking', { content: thinkingStep });
             }
+          });
+          
+          // Always send the response, regardless of isProcessing state
+          webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: res || '(no content)' });
+          
+          // Auto-generate thread name from first message if thread is new
+          const info = this.openAI.getThreadInfo();
+          if (info.active && !info.threadNames[info.active]) {
+            const threadName = prompt.length > 20 ? prompt.substring(0, 20) + '...' : prompt;
+            await this.openAI.setThreadName(info.active, threadName);
+            await postThreads();
           }
         } catch (e: any) {
-          if (this.isProcessing) { // Check if not stopped
-            webviewView.webview.postMessage({ type: 'error', message: e?.message || String(e) });
-          }
+          // Always send error, regardless of isProcessing state
+          webviewView.webview.postMessage({ type: 'error', message: e?.message || String(e) });
         } finally {
           this.isProcessing = false;
         }
       } else if (msg.type === 'newThread') {
+        // If currently processing, stop the current process first
+        if (this.isProcessing) {
+          this.isProcessing = false;
+          webviewView.webview.postMessage({ type: 'thinking', content: 'Creating new thread...' });
+        }
         await this.openAI.newThread();
         try { await this.openAI.initialize(); } catch {}
         await postThreads();
@@ -82,6 +101,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.postMessage({ type: 'clear' });
       } else if (msg.type === 'closeThread') {
         const threadId = msg.id;
+        const activeThreadId = this.openAI.getActiveThreadId();
+        
+        // If closing the active thread and currently processing, stop the current process first
+        if (this.isProcessing && threadId === activeThreadId) {
+          this.isProcessing = false;
+          webviewView.webview.postMessage({ type: 'thinking', content: 'Stopping AI and closing thread...' });
+        }
+        
         if (threadId) {
           await this.openAI.closeThread(threadId);
           try { await this.openAI.initialize(); } catch {}
@@ -89,6 +116,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           webviewView.webview.postMessage({ type: 'clear' });
         }
       } else if (msg.type === 'switchThread') {
+        // If currently processing, stop the current process first
+        if (this.isProcessing) {
+          this.isProcessing = false;
+          webviewView.webview.postMessage({ type: 'thinking', content: 'Switching threads...' });
+        }
         await this.openAI.setActiveThread(msg.id);
         try { await this.openAI.initialize(); } catch {}
         await postThreads();
@@ -131,16 +163,123 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   .msg { padding: 6px 8px; margin: 6px 0; border-radius: 6px; white-space: pre-wrap; }
   .user { background: var(--vscode-editor-selectionBackground); }
   .assistant { background: var(--vscode-editorHoverWidget-background); }
+  .thinking { 
+    background: var(--vscode-editorWidget-background); 
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 8px;
+    margin: 6px 0;
+    padding: 12px;
+    font-style: italic;
+    opacity: 0.8;
+    position: relative;
+  }
+  .thinking-header {
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .thinking-content {
+    color: var(--vscode-descriptionForeground);
+    white-space: pre-wrap;
+    line-height: 1.4;
+  }
+  .thinking-icon {
+    width: 16px;
+    height: 16px;
+    opacity: 0.7;
+  }
   .loading { display: flex; align-items: center; justify-content: center; padding: 20px; color: var(--vscode-foreground); opacity: 0.7; }
   .loading-spinner { width: 20px; height: 20px; border: 2px solid var(--vscode-panel-border); border-top: 2px solid var(--vscode-foreground); border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
   @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
   .loading-text { font-size: 12px; }
   .loading-stop { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border); border-radius: 4px; padding: 4px 8px; margin-left: 12px; cursor: pointer; font-size: 11px; }
   .loading-stop:hover { background: var(--vscode-button-hoverBackground); }
-  #form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--vscode-panel-border); }
-  #prompt { flex: 1; }
-  #prompt:disabled { opacity: 0.5; cursor: not-allowed; }
-  #form button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #form { 
+    display: flex; 
+    gap: 8px; 
+    padding: 12px 16px; 
+    border-top: 1px solid var(--vscode-panel-border); 
+    background: var(--vscode-editor-background);
+    align-items: center;
+    transition: all 0.3s ease;
+  }
+  #form.loading {
+    background: var(--vscode-editorWidget-background);
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.1);
+  }
+  #prompt { 
+    flex: 1; 
+    padding: 10px 16px;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 20px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    font-size: 14px;
+    outline: none;
+    transition: all 0.2s ease;
+    position: relative;
+    resize: none;
+    min-height: 20px;
+    max-height: 120px;
+    font-family: inherit;
+    line-height: 1.4;
+  }
+  #prompt::placeholder {
+    color: var(--vscode-input-placeholderForeground);
+    transition: opacity 0.2s ease;
+  }
+  #prompt:focus::placeholder {
+    opacity: 0.7;
+  }
+  #prompt:focus { 
+    border-color: var(--vscode-focusBorder);
+    box-shadow: 0 0 0 1px var(--vscode-focusBorder), 0 2px 8px rgba(0,0,0,0.1);
+    transform: translateY(-1px);
+  }
+  #prompt:disabled { 
+    opacity: 0.6; 
+    cursor: not-allowed; 
+    background: var(--vscode-input-background);
+  }
+  #form button { 
+    padding: 10px 20px;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: 1px solid var(--vscode-button-border);
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    min-width: 80px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: center;
+  }
+  #form button:hover:not(:disabled) { 
+    background: var(--vscode-button-hoverBackground);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+  #form button:active:not(:disabled) { 
+    transform: translateY(0) scale(0.98);
+  }
+  #form button:disabled { 
+    opacity: 0.5; 
+    cursor: not-allowed; 
+    transform: none;
+    box-shadow: none;
+  }
+  #form button svg {
+    transition: transform 0.2s ease;
+  }
+  #form button:hover:not(:disabled) svg {
+    transform: translateX(2px);
+  }
 </style>
 </head>
 <body>
@@ -150,8 +289,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="messages"></div>
   <form id="form">
-    <input id="prompt" type="text" placeholder="Ask the OpenAI Agent..." />
-    <button type="submit">Send</button>
+    <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send)" rows="1"></textarea>
+    <button type="submit">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"></line>
+        <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
+      </svg>
+      Send
+    </button>
   </form>
   <script nonce="abc123">
     const vscode = acquireVsCodeApi();
@@ -266,19 +411,54 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     function stopAI() {
+      console.log('stopAI called');
       hideLoading();
+      removeThinking();
+      setFormEnabled(true);
       vscode.postMessage({ type: 'stopAI' });
       append('assistant', 'Operation stopped by user', true);
     }
 
     function setFormEnabled(enabled) {
+      console.log('setFormEnabled called with:', enabled);
       const prompt = document.getElementById('prompt');
-      const submitBtn = document.querySelector('#form button[type="submit"]');
+      const submitBtn = document.querySelector('#form button');
+      const form = document.getElementById('form');
+      
+      console.log('Found submitBtn:', submitBtn);
+      
       if (prompt) {
         prompt.disabled = !enabled;
         prompt.placeholder = enabled ? 'Ask the OpenAI Agent...' : 'AI is thinking, please wait...';
       }
-      if (submitBtn) submitBtn.disabled = !enabled;
+      if (submitBtn) {
+        console.log('Current button type:', submitBtn.type);
+        console.log('Current button innerHTML:', submitBtn.innerHTML);
+        if (enabled) {
+          console.log('Setting button to Send');
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22,2 15,22 11,13 2,9 22,2"></polygon></svg>Send';
+          submitBtn.onclick = null;
+          submitBtn.type = 'submit';
+          console.log('Button set to Send, new type:', submitBtn.type);
+        } else {
+          console.log('Setting button to Stop');
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>Stop';
+          submitBtn.onclick = function(e) { e.preventDefault(); stopAI(); };
+          submitBtn.type = 'button';
+          console.log('Button set to Stop, new type:', submitBtn.type);
+        }
+      } else {
+        console.error('Submit button not found!');
+      }
+      if (form) {
+        if (enabled) {
+          form.classList.remove('loading');
+        } else {
+          form.classList.add('loading');
+        }
+      }
     }
 
     // Make stopAI globally available
@@ -302,13 +482,63 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    function appendThinking(content) {
+      const el = document.createElement('div');
+      el.className = 'thinking';
+      
+      const header = document.createElement('div');
+      header.className = 'thinking-header';
+      header.innerHTML = '<svg class="thinking-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>AI is thinking...';
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'thinking-content';
+      contentDiv.textContent = content;
+      
+      el.appendChild(header);
+      el.appendChild(contentDiv);
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function updateThinking(content) {
+      const thinkingEl = messages.querySelector('.thinking .thinking-content');
+      if (thinkingEl) {
+        thinkingEl.textContent = content;
+        messages.scrollTop = messages.scrollHeight;
+      }
+    }
+
+    function removeThinking() {
+      const thinkingEl = messages.querySelector('.thinking');
+      if (thinkingEl) {
+        thinkingEl.remove();
+      }
+    }
+
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type === 'append') {
+        console.log('Received append message, restoring form');
+        console.log('Message content:', msg.content);
         hideLoading();
+        removeThinking();
+        console.log('About to call setFormEnabled(true)');
+        setFormEnabled(true);
         append(msg.role, msg.content, true);
+      } else if (msg.type === 'thinking') {
+        hideLoading();
+        setFormEnabled(false);
+        if (msg.content) {
+          appendThinking(msg.content);
+        }
+      } else if (msg.type === 'updateThinking') {
+        if (msg.content) {
+          updateThinking(msg.content);
+        }
       } else if (msg.type === 'error') {
         hideLoading();
+        removeThinking();
+        setFormEnabled(true);
         append('assistant', 'Error: ' + msg.message, true);
       } else if (msg.type === 'threads') {
         const ids = (msg.info && msg.info.threads) || [];
@@ -332,6 +562,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else if (msg.type === 'clear') {
         hideLoading();
         clearUI();
+      } else if (msg.type === 'restoreForm') {
+        console.log('Received restoreForm message, restoring form');
+        hideLoading();
+        removeThinking();
+        setFormEnabled(true);
       }
     });
 
@@ -341,19 +576,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!value.trim()) return;
       
       // If already processing, stop current operation and start new one
-      if (document.querySelector('.loading')) {
+      if (document.querySelector('.thinking')) {
         stopAI();
         // Small delay to ensure stop is processed
         setTimeout(() => {
           prompt.value = '';
           append('user', value);
-          showLoading('AI is thinking...', true, true);
+          setFormEnabled(false);
           vscode.postMessage({ type: 'sendPrompt', prompt: value });
         }, 100);
       } else {
         prompt.value = '';
         append('user', value);
-        showLoading('AI is thinking...', true, true);
+        setFormEnabled(false);
         vscode.postMessage({ type: 'sendPrompt', prompt: value });
       }
     });
@@ -362,6 +597,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       showLoading('Creating new thread...');
       vscode.postMessage({ type:'newThread' });
     });
+
+    // Handle Enter and Ctrl+Enter for textarea
+    prompt.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        if (e.ctrlKey) {
+          // Ctrl+Enter: Add new line
+          e.preventDefault();
+          const start = prompt.selectionStart;
+          const end = prompt.selectionEnd;
+          const value = prompt.value;
+          prompt.value = value.substring(0, start) + '\\n' + value.substring(end);
+          prompt.selectionStart = prompt.selectionEnd = start + 1;
+          autoResize();
+        } else {
+          // Enter: Send message
+          e.preventDefault();
+          form.dispatchEvent(new Event('submit'));
+        }
+      }
+    });
+
+    // Auto-resize textarea based on content
+    function autoResize() {
+      prompt.style.height = 'auto';
+      const scrollHeight = prompt.scrollHeight;
+      const maxHeight = 120; // max-height from CSS
+      prompt.style.height = Math.min(scrollHeight, maxHeight) + 'px';
+    }
+
+    // Auto-resize on input
+    prompt.addEventListener('input', autoResize);
+
+    // Initial resize
+    autoResize();
   </script>
 </body>
 </html>`;
