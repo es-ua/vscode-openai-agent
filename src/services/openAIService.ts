@@ -236,6 +236,48 @@ export class OpenAIService {
     return { threads: this.configService.getThreads(), active: this.configService.getActiveThreadId() || this.threadId };
   }
 
+  public async getThreadHistory(threadId: string): Promise<Array<{role: string, content: string}>> {
+    const apiKey = await this.configService.getApiKey();
+    if (!apiKey) throw new Error('OpenAI API key is not set');
+
+    try {
+      const response = await this.client.get(`/threads/${threadId}/messages`, {
+        params: { limit: 100, order: 'asc' },
+        headers: this.authHeaders(apiKey)
+      });
+
+      if (response.data.data && response.data.data.length > 0) {
+        const messages: Array<{role: string, content: string}> = [];
+        
+        for (const message of response.data.data) {
+          if (message.role === 'user' || message.role === 'assistant') {
+            let textContent = '';
+            if (message.content && message.content.length > 0) {
+              for (const contentItem of message.content) {
+                if (contentItem.type === 'text') {
+                  textContent += contentItem.text.value;
+                }
+              }
+            }
+            if (textContent.trim()) {
+              messages.push({
+                role: message.role,
+                content: textContent.trim()
+              });
+            }
+          }
+        }
+        
+        return messages;
+      }
+      
+      return [];
+    } catch (error: any) {
+      console.error('Error retrieving thread history:', error.response?.data || error.message);
+      throw new Error(`Failed to retrieve thread history: ${error.response?.data?.error?.message || error.message}`);
+    }
+  }
+
   public async setActiveThread(id: string): Promise<void> {
     this.threadId = id;
     await this.configService.setActiveThreadId(id);

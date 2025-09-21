@@ -20,13 +20,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
-    const postThreads = () => {
+    const postThreads = async () => {
       const info = this.openAI.getThreadInfo();
       webviewView.webview.postMessage({ type: 'threads', info });
+      
+      // Load history for active thread with a small delay to avoid conflicts
+      if (info.active) {
+        const activeThreadId = info.active;
+        setTimeout(async () => {
+          try {
+            const history = await this.openAI.getThreadHistory(activeThreadId);
+            webviewView.webview.postMessage({ type: 'loadHistory', history });
+          } catch (error: any) {
+            console.error('Failed to load thread history:', error);
+            webviewView.webview.postMessage({ type: 'error', message: 'Failed to load chat history' });
+          }
+        }, 100);
+      }
     };
 
     try { await this.openAI.initialize(); } catch {}
-    postThreads();
+    await postThreads();
 
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) postThreads();
@@ -46,11 +60,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else if (msg.type === 'newThread') {
         await this.openAI.newThread();
         try { await this.openAI.initialize(); } catch {}
-    postThreads();
-
-    webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) postThreads();
-    });
+        await postThreads();
         // ask webview to clear UI for fresh chat
         webviewView.webview.postMessage({ type: 'clear' });
       } else if (msg.type === 'closeThread') {
@@ -58,21 +68,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (info.active) {
           await this.openAI.closeThread(info.active);
           try { await this.openAI.initialize(); } catch {}
-    postThreads();
-
-    webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) postThreads();
-    });
+          await postThreads();
           webviewView.webview.postMessage({ type: 'clear' });
         }
       } else if (msg.type === 'switchThread') {
         await this.openAI.setActiveThread(msg.id);
         try { await this.openAI.initialize(); } catch {}
-    postThreads();
-
-    webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) postThreads();
-    });
+        await postThreads();
         webviewView.webview.postMessage({ type: 'clear' });
       }
     });
@@ -130,7 +132,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     let state = vscode.getState() || {}; if (!state.histories) state.histories = {}; if (typeof state.active === 'undefined') state.active = null;
 
-    function setActive(id){ state.active = id; vscode.setState(state); renderHistory(); }
+    function setActive(id){ state.active = id; vscode.setState(state); }
 
     function renderTabs(info){
       tabs.innerHTML='';
@@ -138,7 +140,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const el = document.createElement('div');
         el.className = 'tab' + (id === info.active ? ' active' : '');
         el.textContent = id.slice(0,6);
-        el.onclick = () => { state.active = id; vscode.setState(state); renderHistory(); vscode.postMessage({ type:'switchThread', id }); };
+        el.onclick = () => { vscode.postMessage({ type:'switchThread', id }); };
         tabs.appendChild(el);
       });
       setActive(info.active || null);
@@ -175,6 +177,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const active = (msg.info && msg.info.active) || null;
         if (!active || !ids.includes(active)) { state.active = ids.length ? ids[ids.length-1] : null; vscode.setState(state); }
         renderTabs(msg.info);
+        // Show existing history immediately if available
+        if (state.active && state.histories[state.active]) {
+          renderHistory();
+        }
+      } else if (msg.type === 'loadHistory') {
+        // Load history from server and update local state
+        if (state.active && msg.history) {
+          state.histories[state.active] = msg.history;
+          vscode.setState(state);
+          renderHistory();
+        }
       } else if (msg.type === 'clear') {
         clearUI();
       }
