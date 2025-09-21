@@ -13,7 +13,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const openAIService = new OpenAIService(configService, context.extensionUri.fsPath);
   const editorService = new EditorService();
   const suggestionService = new SuggestionService(openAIService, editorService);
-  const chatViewProvider = new ChatViewProvider(openAIService, context.extensionUri);
+  const chatViewProvider = new ChatViewProvider(openAIService, configService, context.extensionUri);
   
   // Register commands
   const enableCommand = vscode.commands.registerCommand('vscode-openai-agent.enable', () => {

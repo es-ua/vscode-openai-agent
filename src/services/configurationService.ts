@@ -28,6 +28,10 @@ export class ConfigurationService {
   public getModel(): string {
     return this.getConfiguration().get<string>('model') || 'gpt-4o-mini';
   }
+  
+  public setModel(value: string): Thenable<void> {
+    return this.getConfiguration().update('model', value, true);
+  }
 
   public getMode(): 'agent' | 'ask' {
     const m = this.getConfiguration().get<string>('mode') || 'agent';

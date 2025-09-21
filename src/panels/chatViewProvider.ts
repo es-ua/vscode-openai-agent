@@ -1,16 +1,19 @@
 import * as vscode from 'vscode';
 import { OpenAIService } from '../services/openAIService';
+import { ConfigurationService } from '../services/configurationService';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'openaiAgent.chatView';
   public static readonly panelViewId = 'openaiAgent.panelView';
   private _view?: vscode.WebviewView;
   private openAI: OpenAIService;
+  private configService: ConfigurationService;
   private extensionUri: vscode.Uri;
   private isProcessing: boolean = false;
 
-  constructor(openAI: OpenAIService, extensionUri: vscode.Uri) {
+  constructor(openAI: OpenAIService, configService: ConfigurationService, extensionUri: vscode.Uri) {
     this.openAI = openAI;
+    this.configService = configService;
     this.extensionUri = extensionUri;
   }
 
@@ -151,14 +154,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         vscode.commands.executeCommand('vscode-openai-agent.setMode', msg.mode);
         // Send mode change confirmation to the webview
         webviewView.webview.postMessage({ type: 'modeChanged', mode: msg.mode });
+      } else if (msg.type === 'setModel') {
+        // Update the model setting
+        await this.configService.setModel(msg.model);
+        webviewView.webview.postMessage({ type: 'modelChanged', model: msg.model });
+      } else if (msg.type === 'getCurrentModel') {
+        // Send current model to webview
+        const currentModel = this.configService.getModel();
+        webviewView.webview.postMessage({ type: 'modelChanged', model: currentModel });
       }
     });
   }
 
   private getHtml(webview: vscode.Webview): string {
-    const addIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'add_thread.svg')).toString();
-    const clearIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'clear_thread.svg')).toString();
-    const deleteIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'delete_thread.svg')).toString();
+    const addIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'add_macos.svg')).toString();
+    const clearIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'clear_macos.svg')).toString();
+    const deleteIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'close_macos.svg')).toString();
     const csp = `default-src 'none'; img-src ${webview.cspSource} https:; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'nonce-abc123' ${webview.cspSource};`;
     return `<!DOCTYPE html>
 <html lang="en">
@@ -175,10 +186,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   #tabs { margin-left:auto; font-size:11px; opacity:.85; display:flex; gap:6px; flex-wrap:wrap; }
   .tab { padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-panel-border); cursor:pointer; display:flex; align-items:center; gap:4px; }
   .tab.active { background: var(--vscode-editorWidget-background); border-color: var(--vscode-editorWidget-border); }
-  .tab-actions { display:flex; gap:2px; }
-  .tab-btn { background:transparent; border:none; padding:1px 2px; cursor:pointer; border-radius:2px; }
-  .tab-btn:hover { background:var(--vscode-editorWidget-background); }
-  .tab-btn img { width:12px; height:12px; }
+  .tab-actions { display:flex; gap:4px; align-items:center; }
+  .tab-btn { 
+    background:transparent; 
+    border:none; 
+    padding:2px; 
+    cursor:pointer; 
+    border-radius:50%; 
+    width:16px; 
+    height:16px; 
+    display:flex; 
+    align-items:center; 
+    justify-content:center;
+    transition: all 0.2s ease;
+  }
+  .tab-btn:hover { 
+    background:rgba(0,0,0,0.1); 
+    transform: scale(1.1);
+  }
+  .tab-btn img { 
+    width:12px; 
+    height:12px; 
+    pointer-events: none;
+  }
   #messages { flex: 1; overflow: auto; padding: 8px; }
   .msg { padding: 6px 8px; margin: 6px 0; border-radius: 6px; white-space: pre-wrap; }
   .user { background: var(--vscode-editor-selectionBackground); }
@@ -386,6 +416,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   #mode-select:hover {
     border-color: var(--vscode-input-border);
   }
+  #model-select {
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  #model-select:focus {
+    border-color: var(--vscode-focusBorder);
+    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+  }
+  #model-select:hover {
+    border-color: var(--vscode-input-border);
+  }
 </style>
 </head>
 <body>
@@ -410,6 +457,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <option value="agent">🤖 Agent (Auto-suggestions)</option>
       <option value="ask">❓ Ask (Manual questions)</option>
     </select>
+    <label for="model-select">Model:</label>
+    <select id="model-select">
+      <option value="gpt-4o">GPT-4o</option>
+      <option value="gpt-4o-mini">GPT-4o Mini</option>
+      <option value="gpt-4.1">GPT-4.1</option>
+      <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+    </select>
   </div>
   <script nonce="abc123">
     const vscode = acquireVsCodeApi();
@@ -419,11 +473,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const btnNew = document.getElementById('new');
     const tabs = document.getElementById('tabs');
     const modeSelect = document.getElementById('mode-select');
+    const modelSelect = document.getElementById('model-select');
     const clearIcon = '${clearIcon}';
     const deleteIcon = '${deleteIcon}';
 
     let state = vscode.getState() || {}; if (!state.histories) state.histories = {}; if (typeof state.active === 'undefined') state.active = null;
 
+    // Initialize model selector with current value
+    vscode.postMessage({ type: 'getCurrentModel' });
 
     function setActive(id){ state.active = id; vscode.setState(state); }
 
@@ -684,6 +741,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (modeSelect) {
           modeSelect.value = msg.mode;
         }
+      } else if (msg.type === 'modelChanged') {
+        console.log('Model changed to:', msg.model);
+        // Update the select element to reflect the new model
+        if (modelSelect) {
+          modelSelect.value = msg.model;
+        }
       }
     });
 
@@ -719,6 +782,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     modeSelect.addEventListener('change', (e) => {
       const selectedMode = e.target.value;
       vscode.postMessage({ type: 'setMode', mode: selectedMode });
+    });
+
+    // Handle model switching
+    modelSelect.addEventListener('change', (e) => {
+      const selectedModel = e.target.value;
+      vscode.postMessage({ type: 'setModel', model: selectedModel });
     });
 
     // Handle Enter and Ctrl+Enter for textarea
