@@ -151,13 +151,38 @@ export class SuggestionService implements vscode.CompletionItemProvider {
   public async askAtCursor(): Promise<void> {
     const doc = this.editorService.getCurrentDocument();
     if (!doc) return;
+    
+    // Get context around cursor
     const before = this.editorService.getContextBeforeCursor(30);
-    if (!before.trim()) return;
-    const lang = doc.languageId;
-    const completion = await this.openAIService.getCompletion(before, lang);
-    if (!completion) return;
-    const editor = this.editorService.getActiveEditor();
-    if (!editor) return;
-    await editor.edit(edit => { edit.insert(editor.selection.active, completion); });
+    const after = this.editorService.getContextAfterCursor(10);
+    const selectedText = this.editorService.getSelectedText();
+    
+    // Build context message
+    let contextMessage = `Here's the code context around my cursor:\n\n`;
+    contextMessage += `**File:** ${doc.fileName}\n`;
+    contextMessage += `**Language:** ${doc.languageId}\n\n`;
+    
+    if (selectedText.trim()) {
+      contextMessage += `**Selected code:**\n\`\`\`${doc.languageId}\n${selectedText}\n\`\`\`\n\n`;
+    }
+    
+    contextMessage += `**Code before cursor:**\n\`\`\`${doc.languageId}\n${before}\n\`\`\`\n\n`;
+    
+    if (after.trim()) {
+      contextMessage += `**Code after cursor:**\n\`\`\`${doc.languageId}\n${after}\n\`\`\`\n\n`;
+    }
+    
+    contextMessage += `Please help me with this code.`;
+    
+    // Show the chat panel and send the context
+    await vscode.commands.executeCommand('openaiAgent.chatView.focus');
+    
+    // Send the context to the chat panel
+    setTimeout(() => {
+      vscode.commands.executeCommand('workbench.action.webview.postMessage', 'openaiAgent.chatView', {
+        type: 'sendPrompt',
+        prompt: contextMessage
+      });
+    }, 500);
   }
 }

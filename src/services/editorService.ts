@@ -66,4 +66,37 @@ export class EditorService {
     
     return document.getText();
   }
+  
+  public getContextAfterCursor(maxLines: number = 10): string {
+    const editor = this.getActiveEditor();
+    if (!editor || !editor.document) {
+      return '';
+    }
+    
+    const document = editor.document;
+    const position = editor.selection.active;
+    
+    // Get the current line
+    const currentLine = position.line;
+    
+    // Determine the ending line, ensuring we don't go beyond document length
+    const endLine = Math.min(document.lineCount - 1, currentLine + maxLines);
+    
+    // Get text from current position to endLine
+    const range = new vscode.Range(
+      position,
+      new vscode.Position(endLine, document.lineAt(endLine).text.length)
+    );
+    
+    return document.getText(range);
+  }
+  
+  public getSelectedText(): string {
+    const editor = this.getActiveEditor();
+    if (!editor || !editor.document) {
+      return '';
+    }
+    
+    return editor.document.getText(editor.selection);
+  }
 }

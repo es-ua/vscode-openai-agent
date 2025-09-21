@@ -48,11 +48,17 @@
       },
       {
         "command": "vscode-openai-agent.ask",
-        "title": "OpenAI Agent: Ask (at Cursor)"
+        "title": "Ask AI about code at cursor",
+        "icon": "$(sparkle)"
       },
       {
         "command": "vscode-openai-agent.reloadMcp",
         "title": "OpenAI Agent: Reload MCP Servers"
+      },
+      {
+        "command": "vscode-openai-agent.showPanel",
+        "title": "OpenAI Agent: Show Panel",
+        "icon": "$(sparkle)"
       }
     ],
     "configuration": {
@@ -168,9 +174,18 @@
       }
     },
     "views": {
-      "openaiAgent": [
+      "openaiAgent-sidebar": [
         {
           "id": "openaiAgent.chatView",
+          "name": "OpenAI Agent",
+          "type": "webview",
+          "contextualTitle": "OpenAI Agent",
+          "when": "true"
+        }
+      ],
+      "panel": [
+        {
+          "id": "openaiAgent.panelView",
           "name": "OpenAI Agent",
           "type": "webview",
           "contextualTitle": "OpenAI Agent",
@@ -181,7 +196,7 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "openaiAgent",
+          "id": "openaiAgent-sidebar",
           "title": "OpenAI Agent",
           "icon": "media/icon.svg"
         }
@@ -191,14 +206,16 @@
       "view/title": [
         {
           "command": "vscode-openai-agent.toggleMode",
-          "when": "view == openaiAgent.chatView",
+          "when": "view == openaiAgent.chatView || view == openaiAgent.panelView",
           "group": "navigation@1"
         }
       ],
       "editor/title": [
         {
           "command": "vscode-openai-agent.ask",
-          "group": "navigation@9"
+          "group": "navigation@9",
+          "when": "editorTextFocus",
+          "icon": "$(sparkle)"
         }
       ]
     }

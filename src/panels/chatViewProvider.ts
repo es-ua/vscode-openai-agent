@@ -3,6 +3,7 @@ import { OpenAIService } from '../services/openAIService';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'openaiAgent.chatView';
+  public static readonly panelViewId = 'openaiAgent.panelView';
   private _view?: vscode.WebviewView;
   private openAI: OpenAIService;
   private extensionUri: vscode.Uri;
@@ -60,6 +61,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'sendPrompt') {
         const prompt: string = msg.prompt || '';
         if (!prompt.trim()) return;
+        
+        // Cancel any current run before starting a new one
+        if (this.isProcessing) {
+          try {
+            await this.openAI.cancelCurrentRun();
+          } catch (error) {
+            console.warn('Failed to cancel previous run:', error);
+          }
+        }
         
         this.isProcessing = true;
         try {
@@ -130,7 +140,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await postThreads();
       } else if (msg.type === 'stopAI') {
         this.isProcessing = false;
-        // Note: We can't actually cancel the OpenAI API request, but we stop processing the response
+        // Cancel the current OpenAI run
+        try {
+          await this.openAI.cancelCurrentRun();
+        } catch (error) {
+          console.warn('Failed to cancel OpenAI run:', error);
+        }
       }
     });
   }

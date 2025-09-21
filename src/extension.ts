@@ -67,13 +67,17 @@ export async function activate(context: vscode.ExtensionContext) {
     suggestionService.setMode('ask');
     await suggestionService.askAtCursor();
   });
-const reloadMcpCommand = vscode.commands.registerCommand('vscode-openai-agent.reloadMcp', async () => {
+  const reloadMcpCommand = vscode.commands.registerCommand('vscode-openai-agent.reloadMcp', async () => {
     try {
       await openAIService.initialize();
       vscode.window.showInformationMessage('MCP servers reloaded');
     } catch (e: any) {
       vscode.window.showErrorMessage('Failed to reload MCP servers: ' + (e?.message || e));
     }
+  });
+
+  const showPanelCommand = vscode.commands.registerCommand('vscode-openai-agent.showPanel', async () => {
+    await vscode.commands.executeCommand('openaiAgent.panelView.focus');
   });
 
   // Register completions provider
@@ -101,8 +105,10 @@ const reloadMcpCommand = vscode.commands.registerCommand('vscode-openai-agent.re
     toggleModeCommand,
     askCommand,
     reloadMcpCommand,
+    showPanelCommand,
     completionProvider,
-    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatViewProvider)
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatViewProvider),
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.panelViewId, chatViewProvider)
   );
   
   if (inlineCompletionProvider) {

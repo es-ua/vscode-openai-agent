@@ -10,6 +10,7 @@ export class OpenAIService {
   private threadId: string | undefined;
   private mcp: McpClient | null = null;
   private basePath: string;
+  private currentRunId: string | undefined;
 
   constructor(configService: ConfigurationService, basePath: string) {
     this.configService = configService;
@@ -158,8 +159,14 @@ export class OpenAIService {
       await this.client.post(`/threads/${this.threadId}/messages`, { role: 'user', content: [{ type: 'text', text: userMessage }] }, { headers: this.authHeaders(apiKey) });
       const runResponse = await this.client.post(`/threads/${this.threadId}/runs`, { assistant_id: this.assistantId }, { headers: this.authHeaders(apiKey) });
       const runId = runResponse.data.id;
-      return await this.waitForRunCompletion(apiKey, runId, onThinking);
+      this.currentRunId = runId;
+      try {
+        return await this.waitForRunCompletion(apiKey, runId, onThinking);
+      } finally {
+        this.currentRunId = undefined;
+      }
     } catch (e: any) {
+      this.currentRunId = undefined;
       throw new Error(e?.message || String(e));
     }
   }
@@ -356,6 +363,22 @@ export class OpenAIService {
 
   public getActiveThreadId(): string | undefined {
     return this.configService.getActiveThreadId();
+  }
+
+  public async cancelCurrentRun(): Promise<void> {
+    if (this.currentRunId && this.threadId) {
+      try {
+        const apiKey = await this.configService.getApiKey();
+        if (apiKey) {
+          await this.client.post(`/threads/${this.threadId}/runs/${this.currentRunId}/cancel`, {}, { headers: this.authHeaders(apiKey) });
+          console.log(`Cancelled run ${this.currentRunId}`);
+        }
+      } catch (error: any) {
+        console.warn('Failed to cancel run:', error?.message || error);
+      } finally {
+        this.currentRunId = undefined;
+      }
+    }
   }
 
   public async setActiveThread(id: string): Promise<void> {
