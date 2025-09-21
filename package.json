@@ -1,0 +1,84 @@
+{
+  "name": "vscode-openai-agent",
+  "displayName": "OpenAI Agent",
+  "description": "AI coding assistant powered by OpenAI Assistants API",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages",
+    "Machine Learning",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscode-openai-agent.enable",
+        "title": "OpenAI Agent: Enable"
+      },
+      {
+        "command": "vscode-openai-agent.disable",
+        "title": "OpenAI Agent: Disable"
+      },
+      {
+        "command": "vscode-openai-agent.setApiKey",
+        "title": "OpenAI Agent: Set API Key"
+      },
+      {
+        "command": "vscode-openai-agent.resetContext",
+        "title": "OpenAI Agent: Reset Context"
+      },
+      {
+        "command": "vscode-openai-agent.resetAssistant",
+        "title": "OpenAI Agent: Reset Assistant"
+      }
+    ],
+    "configuration": {
+      "title": "OpenAI Agent",
+      "properties": {
+        "openaiAgent.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable the OpenAI Agent"
+        },
+        "openaiAgent.model": {
+          "type": "string",
+          "default": "gpt-4",
+          "enum": [
+            "gpt-4",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo"
+          ],
+          "description": "OpenAI model to use for code suggestions"
+        },
+        "openaiAgent.maxTokens": {
+          "type": "number",
+          "default": 1000,
+          "description": "Maximum number of tokens for code completion"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext ts",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.10",
+    "@types/vscode": "^1.84.2",
+    "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}
