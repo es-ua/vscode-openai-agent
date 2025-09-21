@@ -145,6 +145,25 @@
               "command"
             ]
           }
+        },
+        "openaiAgent.confirmWrites": {
+          "type": "string",
+          "default": "always",
+          "enum": [
+            "always",
+            "agentOnly",
+            "chatOnly",
+            "never"
+          ],
+          "description": "When to show confirmation before write/delete operations (via MCP tools)"
+        },
+        "openaiAgent.writeWhitelist": {
+          "type": "array",
+          "default": [],
+          "description": "List of trusted paths/globs where write/delete operations are allowed without confirmation",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

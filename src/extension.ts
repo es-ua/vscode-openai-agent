@@ -10,7 +10,7 @@ export async function activate(context: vscode.ExtensionContext) {
   
   // Initialize services
   const configService = new ConfigurationService(context);
-  const openAIService = new OpenAIService(configService);
+  const openAIService = new OpenAIService(configService, context.extensionUri.fsPath);
   const editorService = new EditorService();
   const suggestionService = new SuggestionService(openAIService, editorService);
   const chatViewProvider = new ChatViewProvider(openAIService, context.extensionUri);

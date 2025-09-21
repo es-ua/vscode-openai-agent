@@ -9,9 +9,11 @@ export class OpenAIService {
   private assistantId: string | undefined;
   private threadId: string | undefined;
   private mcp: McpClient | null = null;
+  private basePath: string;
 
-  constructor(configService: ConfigurationService) {
+  constructor(configService: ConfigurationService, basePath: string) {
     this.configService = configService;
+    this.basePath = basePath;
     this.client = axios.create({
       baseURL: 'https://api.openai.com/v1',
       headers: {
@@ -32,14 +34,22 @@ export class OpenAIService {
 
       try {
         this.mcp = new McpClient();
-        const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
-        await this.mcp.start(ws);
+        const root = this.basePath || process.cwd();
+        await this.mcp.start(root);
       } catch (e) {
         console.warn('Failed to start MCP server, proceeding without tools:', e);
       }
 
       this.assistantId = await this.getOrCreateAssistant(apiKey);
-      this.threadId = await this.createThread(apiKey);
+      const existing = this.configService.getActiveThreadId();
+      if (existing) { this.threadId = existing; } else { this.threadId = await this.createThread(apiKey);
+      const list = this.configService.getThreads();
+      if (!list.includes(this.threadId)) { list.push(this.threadId); await this.configService.setThreads(list); }
+      await this.configService.setActiveThreadId(this.threadId);
+      await this.configService.setThreadId(this.threadId); }
+      const list = this.configService.getThreads();
+      if (this.threadId && !list.includes(this.threadId)) { list.push(this.threadId); await this.configService.setThreads(list); }
+      if (this.threadId) { await this.configService.setActiveThreadId(this.threadId); await this.configService.setThreadId(this.threadId); }
 
       vscode.window.showInformationMessage('OpenAI Agent initialized successfully');
     } catch (error: any) {
@@ -221,11 +231,46 @@ export class OpenAIService {
     }
   }
 
+
+  public getThreadInfo() {
+    return { threads: this.configService.getThreads(), active: this.configService.getActiveThreadId() || this.threadId };
+  }
+
+  public async setActiveThread(id: string): Promise<void> {
+    this.threadId = id;
+    await this.configService.setActiveThreadId(id);
+    await this.configService.setThreadId(id);
+  }
+
+  public async newThread(): Promise<string> {
+    const apiKey = await this.configService.getApiKey();
+    if (!apiKey) throw new Error('OpenAI API key is not set');
+    const id = await this.createThread(apiKey);
+    const list = this.configService.getThreads();
+    if (!list.includes(id)) { list.push(id); await this.configService.setThreads(list); }
+    await this.setActiveThread(id);
+    return id;
+  }
+
+  public async closeThread(id: string): Promise<void> {
+    const list = this.configService.getThreads().filter(t => t !== id);
+    await this.configService.setThreads(list);
+    const active = this.configService.getActiveThreadId();
+    if (active === id) {
+      const next = list[list.length - 1];
+      if (next) await this.setActiveThread(next);
+    }
+  }
+
   public async resetThread(): Promise<void> {
     const apiKey = await this.configService.getApiKey();
     if (!apiKey) throw new Error('OpenAI API key is not set');
     try {
       this.threadId = await this.createThread(apiKey);
+      const list = this.configService.getThreads();
+      if (!list.includes(this.threadId)) { list.push(this.threadId); await this.configService.setThreads(list); }
+      await this.configService.setActiveThreadId(this.threadId);
+      await this.configService.setThreadId(this.threadId);
     } catch (error: any) {
       console.error('Error resetting thread:', error.response?.data || error.message);
       throw new Error(`Failed to reset thread: ${error.response?.data?.error?.message || error.message}`);
