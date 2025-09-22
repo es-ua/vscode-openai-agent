@@ -3,7 +3,7 @@
   "name": "vscode-openai-agent",
   "displayName": "OpenAI Agent",
   "description": "AI coding assistant powered by OpenAI Assistants API",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -242,8 +242,6 @@
     "@types/vscode": "^1.60.0",
     "typescript": "^5.2.2"
   },
-  "dependencies": {
-    "axios": "^1.6.0"
-  },
+  "dependencies": {},
   "publisher": "Esso"
 }

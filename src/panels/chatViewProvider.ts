@@ -63,7 +63,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!msg || !msg.type) return;
       if (msg.type === 'sendPrompt') {
         const prompt: string = msg.prompt || '';
-        if (!prompt.trim()) return;
+        const files: any[] = msg.files || [];
+        if (!prompt.trim() && files.length === 0) return;
         
         // Cancel any current run before starting a new one
         if (this.isProcessing) {
@@ -77,9 +78,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.isProcessing = true;
         try {
           // Show initial thinking
-          webviewView.webview.postMessage({ type: 'thinking', content: 'Analyzing your question...' });
+          const thinkingContent = files.length > 0 
+            ? `Analyzing your question and ${files.length} file(s)...`
+            : 'Analyzing your question...';
+          webviewView.webview.postMessage({ type: 'thinking', content: thinkingContent });
           
-          const res = await this.openAI.chat(prompt, (thinkingStep: string) => {
+          // Create enhanced prompt with file information
+          let enhancedPrompt = prompt;
+          if (files.length > 0) {
+            const fileInfo = files.map(f => `- ${f.name} (${f.type}, ${Math.round(f.size/1024)}KB)`).join('\n');
+            enhancedPrompt = `Files attached:\n${fileInfo}\n\nQuestion: ${prompt}`;
+          }
+          
+          const res = await this.openAI.chat(enhancedPrompt, (thinkingStep: string) => {
             if (this.isProcessing) {
               webviewView.webview.postMessage({ type: 'updateThinking', content: thinkingStep });
             }
@@ -268,6 +279,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     border-top: 1px solid var(--vscode-panel-border);
     margin: 12px 0;
   }
+  .attached-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0;
+    padding: 8px;
+    background: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+  }
+  .attached-file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-radius: 4px;
+    font-size: 12px;
+    max-width: 200px;
+  }
+  .attached-file img {
+    width: 16px;
+    height: 16px;
+    object-fit: cover;
+    border-radius: 2px;
+  }
+  .attached-file .file-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .attached-file .remove-btn {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 2px;
+    opacity: 0.7;
+  }
+  .attached-file .remove-btn:hover {
+    opacity: 1;
+    background: rgba(255,255,255,0.1);
+  }
+  .file-preview {
+    max-width: 300px;
+    max-height: 200px;
+    border-radius: 4px;
+    margin: 4px 0;
+    border: 1px solid var(--vscode-panel-border);
+  }
   .thinking { 
     background: var(--vscode-editorWidget-background); 
     border: 1px solid var(--vscode-panel-border);
@@ -308,8 +372,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     padding: 12px 16px; 
     border-top: 1px solid var(--vscode-panel-border); 
     background: var(--vscode-editor-background);
-    align-items: center;
+    align-items: flex-end;
     transition: all 0.3s ease;
+  }
+  .input-container {
+    display: flex;
+    flex: 1;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .file-upload-container {
+    display: flex;
+    align-items: center;
   }
   #form.loading {
     background: var(--vscode-editorWidget-background);
@@ -364,6 +438,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     align-items: center;
     gap: 6px;
     justify-content: center;
+  }
+  #file-upload-btn {
+    padding: 8px;
+    min-width: auto;
+    border-radius: 50%;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--vscode-button-secondaryBorder);
+  }
+  #file-upload-btn:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
   }
   #form button:hover:not(:disabled) { 
     background: var(--vscode-button-hoverBackground);
@@ -442,7 +529,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="messages"></div>
   <form id="form">
-    <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send)" rows="1"></textarea>
+    <div class="input-container">
+      <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send)" rows="1"></textarea>
+      <div class="file-upload-container">
+        <input type="file" id="file-input" multiple accept="image/*,.txt,.md,.js,.ts,.py,.json,.xml,.csv,.pdf" style="display: none;">
+        <button type="button" id="file-upload-btn" title="Upload files or images">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7,10 12,15 17,10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
     <button type="submit">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -474,8 +573,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const tabs = document.getElementById('tabs');
     const modeSelect = document.getElementById('mode-select');
     const modelSelect = document.getElementById('model-select');
+    const fileInput = document.getElementById('file-input');
+    const fileUploadBtn = document.getElementById('file-upload-btn');
     const clearIcon = '${clearIcon}';
     const deleteIcon = '${deleteIcon}';
+    
+    // Store attached files
+    let attachedFiles = [];
+
+    // File handling functions
+    function createFilePreview(file) {
+      return new Promise((resolve) => {
+        if (file.type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.readAsDataURL(file);
+        } else {
+          resolve(null);
+        }
+      });
+    }
+
+    function addAttachedFile(file) {
+      createFilePreview(file).then(preview => {
+        attachedFiles.push({ file, preview });
+        updateAttachedFilesDisplay();
+      });
+    }
+
+    function removeAttachedFile(index) {
+      attachedFiles.splice(index, 1);
+      updateAttachedFilesDisplay();
+    }
+
+    function updateAttachedFilesDisplay() {
+      const existingDisplay = document.querySelector('.attached-files');
+      if (existingDisplay) {
+        existingDisplay.remove();
+      }
+
+      if (attachedFiles.length === 0) return;
+
+      const filesContainer = document.createElement('div');
+      filesContainer.className = 'attached-files';
+      
+      attachedFiles.forEach((fileData, index) => {
+        const fileEl = document.createElement('div');
+        fileEl.className = 'attached-file';
+        
+        if (fileData.preview) {
+          const img = document.createElement('img');
+          img.src = fileData.preview;
+          img.alt = fileData.file.name;
+          fileEl.appendChild(img);
+        }
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'file-name';
+        nameSpan.textContent = fileData.file.name;
+        fileEl.appendChild(nameSpan);
+        
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.innerHTML = '×';
+        removeBtn.onclick = () => removeAttachedFile(index);
+        fileEl.appendChild(removeBtn);
+        
+        filesContainer.appendChild(fileEl);
+      });
+      
+      // Insert before the form
+      form.parentNode.insertBefore(filesContainer, form);
+    }
 
     let state = vscode.getState() || {}; if (!state.histories) state.histories = {}; if (typeof state.active === 'undefined') state.active = null;
 
@@ -642,12 +811,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       history.forEach(m => append(m.role, m.content, false));
     }
 
-    function append(role, content, save=true) {
+    function append(role, content, save=true, files=[]) {
       const el = document.createElement('div');
       el.className = 'msg ' + role;
       
-      // Use innerHTML to support basic HTML formatting
-      el.innerHTML = (role === 'assistant' ? '<strong>AI:</strong> ' : '<strong>You:</strong> ') + content;
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'msg-content';
+      
+      const roleDiv = document.createElement('div');
+      roleDiv.className = 'msg-role';
+      roleDiv.textContent = role === 'assistant' ? 'AI:' : 'You:';
+      
+      const textDiv = document.createElement('div');
+      textDiv.className = 'msg-text';
+      textDiv.innerHTML = content;
+      
+      contentDiv.appendChild(roleDiv);
+      contentDiv.appendChild(textDiv);
+      
+      // Add file attachments if any
+      if (files && files.length > 0) {
+        const filesDiv = document.createElement('div');
+        filesDiv.className = 'attached-files';
+        
+        files.forEach(fileData => {
+          const fileEl = document.createElement('div');
+          fileEl.className = 'attached-file';
+          
+          if (fileData.preview) {
+            const img = document.createElement('img');
+            img.src = fileData.preview;
+            img.alt = fileData.file.name;
+            img.className = 'file-preview';
+            fileEl.appendChild(img);
+          }
+          
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'file-name';
+          nameSpan.textContent = fileData.file.name;
+          fileEl.appendChild(nameSpan);
+          
+          filesDiv.appendChild(fileEl);
+        });
+        
+        contentDiv.appendChild(filesDiv);
+      }
+      
+      el.appendChild(contentDiv);
       messages.appendChild(el);
       messages.scrollTop = messages.scrollHeight;
       // Note: History is now stored on OpenAI server, not locally
@@ -753,25 +963,52 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const value = prompt.value || '';
-      if (!value.trim()) return;
+      if (!value.trim() && attachedFiles.length === 0) return;
       
       // If already processing, stop current operation and start new one
       if (document.querySelector('.thinking')) {
         stopAI();
         // Small delay to ensure stop is processed
         setTimeout(() => {
-          prompt.value = '';
-          append('user', value);
-          setFormEnabled(false);
-          vscode.postMessage({ type: 'sendPrompt', prompt: value });
+          sendMessageWithFiles(value);
         }, 100);
       } else {
-        prompt.value = '';
-        append('user', value);
-        setFormEnabled(false);
-        vscode.postMessage({ type: 'sendPrompt', prompt: value });
+        sendMessageWithFiles(value);
       }
     });
+
+    function sendMessageWithFiles(text) {
+      // Create message content with files
+      const messageContent = {
+        text: text,
+        files: attachedFiles.map(fileData => ({
+          name: fileData.file.name,
+          type: fileData.file.type,
+          size: fileData.file.size,
+          preview: fileData.preview
+        }))
+      };
+
+      // Display user message with files
+      append('user', text, false, attachedFiles);
+      
+      // Clear form
+      prompt.value = '';
+      attachedFiles = [];
+      updateAttachedFilesDisplay();
+      setFormEnabled(false);
+      
+      // Send to backend
+      vscode.postMessage({ 
+        type: 'sendPrompt', 
+        prompt: text,
+        files: attachedFiles.map(fileData => ({
+          name: fileData.file.name,
+          type: fileData.file.type,
+          size: fileData.file.size
+        }))
+      });
+    }
 
     btnNew.addEventListener('click', () => {
       showLoading('Creating new thread...');
@@ -788,6 +1025,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     modelSelect.addEventListener('change', (e) => {
       const selectedModel = e.target.value;
       vscode.postMessage({ type: 'setModel', model: selectedModel });
+    });
+
+    // Handle file upload
+    fileUploadBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      files.forEach(file => {
+        // Check file size (limit to 10MB)
+        if (file.size > 10 * 1024 * 1024) {
+          alert('File size too large. Please select files smaller than 10MB.');
+          return;
+        }
+        addAttachedFile(file);
+      });
+      // Clear the input so the same file can be selected again
+      e.target.value = '';
     });
 
     // Handle Enter and Ctrl+Enter for textarea

@@ -17,3 +17,4 @@ node_modules/**
 # Old packages (keep current version)
 vscode-openai-agent-0.1.0.vsix
 vscode-openai-agent-0.1.1.vsix
+vscode-openai-agent-0.1.2.vsix

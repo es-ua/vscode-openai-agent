@@ -1,10 +1,9 @@
-import axios, { AxiosInstance } from 'axios';
 import * as vscode from 'vscode';
 import { ConfigurationService } from './configurationService';
 import { McpClient } from './mcpClient';
 
 export class OpenAIService {
-  private client: AxiosInstance;
+  private baseURL: string;
   private configService: ConfigurationService;
   private assistantId: string | undefined;
   private threadId: string | undefined;
@@ -15,17 +14,41 @@ export class OpenAIService {
   constructor(configService: ConfigurationService, basePath: string) {
     this.configService = configService;
     this.basePath = basePath;
-    this.client = axios.create({
-      baseURL: 'https://api.openai.com/v1',
-      headers: {
-        'Content-Type': 'application/json',
-        'OpenAI-Beta': 'assistants=v2'
-      }
-    });
+    this.baseURL = 'https://api.openai.com/v1';
   }
 
   private authHeaders(apiKey: string) {
     return { 'Authorization': `Bearer ${apiKey}`, 'OpenAI-Beta': 'assistants=v2' };
+  }
+
+  private async makeRequest(method: string, endpoint: string, data?: any, apiKey?: string): Promise<any> {
+    const url = `${this.baseURL}${endpoint}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'OpenAI-Beta': 'assistants=v2'
+    };
+
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    const options: RequestInit = {
+      method,
+      headers
+    };
+
+    if (data && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+      options.body = JSON.stringify(data);
+    }
+
+    const response = await fetch(url, options);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as any;
+      throw new Error(`HTTP ${response.status}: ${errorData.error?.message || response.statusText}`);
+    }
+
+    return await response.json();
   }
 
   public async initialize(): Promise<void> {
@@ -64,7 +87,7 @@ export class OpenAIService {
     const savedAssistantId = this.configService.getAssistantId();
     if (savedAssistantId) {
       try {
-        await this.client.get(`/assistants/${savedAssistantId}`, { headers: this.authHeaders(apiKey) });
+        await this.makeRequest('GET', `/assistants/${savedAssistantId}`, undefined, apiKey);
         return savedAssistantId;
       } catch {
         // will create a new one below
@@ -74,7 +97,7 @@ export class OpenAIService {
     try {
       let response;
       try {
-        response = await this.client.post('/assistants', {
+        response = await this.makeRequest('POST', '/assistants', {
         name: 'VS Code Coding Assistant',
         description: 'An AI assistant that helps with coding in VS Code',
         model: this.configService.getModel(),
@@ -88,12 +111,12 @@ export class OpenAIService {
           { type: 'function', function: { name: 'delete_file', description: 'Delete a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }
         ],
         instructions: `You are an AI programming assistant embedded in VS Code.\nYour primary role is to help users write code by providing intelligent code completions and suggestions.\nAnalyze the code context provided and generate relevant, high-quality code completions.\nFocus on producing working, efficient, and idiomatic code in the language being used.\nWhen possible, follow the coding style evident in the existing code.\nKeep your responses focused on code completion unless specifically asked for explanations.`
-      }, { headers: this.authHeaders(apiKey) });
+      }, apiKey);
       } catch (e: any) {
-        const msg = e?.response?.data?.error?.message || '';
+        const msg = e?.message || '';
         if (/cannot be used with the Assistants API/i.test(msg)) {
           const fallbackModel = 'gpt-4o-mini';
-          response = await this.client.post('/assistants', {
+          response = await this.makeRequest('POST', '/assistants', {
             name: 'VS Code Coding Assistant',
             description: 'An AI assistant that helps with coding in VS Code',
             model: fallbackModel,
@@ -106,26 +129,26 @@ export class OpenAIService {
               { type: 'function', function: { name: 'make_dir', description: 'Create a directory (recursive)', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
               { type: 'function', function: { name: 'delete_file', description: 'Delete a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }
             ]
-          }, { headers: this.authHeaders(apiKey) });
+          }, apiKey);
         } else { throw e; }
       }
 
-      const assistantId = response.data.id;
+      const assistantId = response.id;
       this.configService.setAssistantId(assistantId);
       return assistantId;
     } catch (error: any) {
-      console.error('Error creating assistant:', error.response?.data || error.message);
-      throw new Error(`Failed to create OpenAI assistant: ${error.response?.data?.error?.message || error.message}`);
+      console.error('Error creating assistant:', error.message);
+      throw new Error(`Failed to create OpenAI assistant: ${error.message}`);
     }
   }
 
   private async createThread(apiKey: string): Promise<string> {
     try {
-      const response = await this.client.post('/threads', {}, { headers: this.authHeaders(apiKey) });
-      return response.data.id;
+      const response = await this.makeRequest('POST', '/threads', {}, apiKey);
+      return response.id;
     } catch (error: any) {
-      console.error('Error creating thread:', error.response?.data || error.message);
-      throw new Error(`Failed to create thread: ${error.response?.data?.error?.message || error.message}`);
+      console.error('Error creating thread:', error.message);
+      throw new Error(`Failed to create thread: ${error.message}`);
     }
   }
 
@@ -136,16 +159,16 @@ export class OpenAIService {
       if (!apiKey || !this.assistantId || !this.threadId) throw new Error('OpenAI Agent not properly initialized');
     }
     try {
-      await this.client.post(`/threads/${this.threadId}/messages`, {
+      await this.makeRequest('POST', `/threads/${this.threadId}/messages`, {
         role: 'user',
         content: [{ type: 'text', text: `I'm writing code in ${language}. Here's the context\n\n${codeContext}\n\nPlease complete the next part of the code.` }]
-      }, { headers: this.authHeaders(apiKey) });
-      const runResponse = await this.client.post(`/threads/${this.threadId}/runs`, { assistant_id: this.assistantId }, { headers: this.authHeaders(apiKey) });
-      const runId = runResponse.data.id;
+      }, apiKey);
+      const runResponse = await this.makeRequest('POST', `/threads/${this.threadId}/runs`, { assistant_id: this.assistantId }, apiKey);
+      const runId = runResponse.id;
       return await this.waitForRunCompletion(apiKey, runId);
     } catch (error: any) {
-      console.error('OpenAI API Error:', error.response?.data || error.message);
-      throw new Error(`OpenAI API Error: ${error.response?.data?.error?.message || error.message}`);
+      console.error('OpenAI API Error:', error.message);
+      throw new Error(`OpenAI API Error: ${error.message}`);
     }
   }
 
@@ -156,9 +179,9 @@ export class OpenAIService {
       if (!apiKey || !this.assistantId || !this.threadId) throw new Error('OpenAI Agent not properly initialized');
     }
     try {
-      await this.client.post(`/threads/${this.threadId}/messages`, { role: 'user', content: [{ type: 'text', text: userMessage }] }, { headers: this.authHeaders(apiKey) });
-      const runResponse = await this.client.post(`/threads/${this.threadId}/runs`, { assistant_id: this.assistantId }, { headers: this.authHeaders(apiKey) });
-      const runId = runResponse.data.id;
+      await this.makeRequest('POST', `/threads/${this.threadId}/messages`, { role: 'user', content: [{ type: 'text', text: userMessage }] }, apiKey);
+      const runResponse = await this.makeRequest('POST', `/threads/${this.threadId}/runs`, { assistant_id: this.assistantId }, apiKey);
+      const runId = runResponse.id;
       this.currentRunId = runId;
       try {
         return await this.waitForRunCompletion(apiKey, runId, onThinking);
@@ -176,10 +199,10 @@ export class OpenAIService {
     const delayMs = 1000;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const response = await this.client.get(`/threads/${this.threadId}/runs/${runId}`, { headers: this.authHeaders(apiKey) });
-        const status = response.data.status;
+        const response = await this.makeRequest('GET', `/threads/${this.threadId}/runs/${runId}`, undefined, apiKey);
+        const status = response.status;
         if (status === 'requires_action') {
-          const toolCalls = response.data.required_action?.submit_tool_outputs?.tool_calls || [];
+          const toolCalls = response.required_action?.submit_tool_outputs?.tool_calls || [];
           const outputs: Array<{ tool_call_id: string; output: string }> = [];
           
           if (onThinking && toolCalls.length > 0) {
@@ -221,18 +244,18 @@ export class OpenAIService {
             onThinking('Processing tool results...');
           }
           
-          await this.client.post(`/threads/${this.threadId}/runs/${runId}/submit_tool_outputs`, { tool_outputs: outputs }, { headers: this.authHeaders(apiKey) });
+          await this.makeRequest('POST', `/threads/${this.threadId}/runs/${runId}/submit_tool_outputs`, { tool_outputs: outputs }, apiKey);
         } else if (status === 'completed') {
           if (onThinking) {
             onThinking('Generating final response...');
           }
           return await this.getLastAssistantMessage(apiKey);
         } else if (status === 'failed' || status === 'cancelled' || status === 'expired') {
-          throw new Error(`Run ${status}: ${response.data.last_error?.message || 'Unknown error'}`);
+          throw new Error(`Run ${status}: ${response.last_error?.message || 'Unknown error'}`);
         } else if (status === 'in_progress' || status === 'queued') {
           if (onThinking) {
             // Get more detailed status information
-            const runDetails = response.data;
+            const runDetails = response;
             let thinkingText = `Processing... (${status})`;
             
             if (runDetails.required_action) {
@@ -250,13 +273,10 @@ export class OpenAIService {
           // Try to get intermediate messages to show thinking process
           if (onThinking && status === 'in_progress') {
             try {
-              const messagesResponse = await this.client.get(`/threads/${this.threadId}/messages`, { 
-                params: { limit: 5, order: 'desc' }, 
-                headers: this.authHeaders(apiKey) 
-              });
+              const messagesResponse = await this.makeRequest('GET', `/threads/${this.threadId}/messages?limit=5&order=desc`, undefined, apiKey);
               
-              if (messagesResponse.data.data && messagesResponse.data.data.length > 0) {
-                const lastMessage = messagesResponse.data.data[0];
+              if (messagesResponse.data && messagesResponse.data.length > 0) {
+                const lastMessage = messagesResponse.data[0];
                 if (lastMessage.role === 'assistant' && lastMessage.content) {
                   let thinkingText = '';
                   for (const contentItem of lastMessage.content) {
@@ -276,8 +296,8 @@ export class OpenAIService {
         }
         await new Promise(resolve => setTimeout(resolve, delayMs));
       } catch (error: any) {
-        console.error('Error checking run status:', error.response?.data || error.message);
-        throw new Error(`Error checking completion status: ${error.response?.data?.error?.message || error.message}`);
+        console.error('Error checking run status:', error.message);
+        throw new Error(`Error checking completion status: ${error.message}`);
       }
     }
     throw new Error('Timed out waiting for completion');
@@ -285,9 +305,9 @@ export class OpenAIService {
 
   private async getLastAssistantMessage(apiKey: string): Promise<string> {
     try {
-      const response = await this.client.get(`/threads/${this.threadId}/messages`, { params: { limit: 1, order: 'desc' }, headers: this.authHeaders(apiKey) });
-      if (response.data.data && response.data.data.length > 0) {
-        const message = response.data.data[0];
+      const response = await this.makeRequest('GET', `/threads/${this.threadId}/messages?limit=1&order=desc`, undefined, apiKey);
+      if (response.data && response.data.length > 0) {
+        const message = response.data[0];
         if (message.role === 'assistant' && message.content && message.content.length > 0) {
           let textContent = '';
           for (const contentItem of message.content) {
@@ -303,8 +323,8 @@ export class OpenAIService {
       }
       return '';
     } catch (error: any) {
-      console.error('Error retrieving messages:', error.response?.data || error.message);
-      throw new Error(`Error retrieving completion: ${error.response?.data?.error?.message || error.message}`);
+      console.error('Error retrieving messages:', error.message);
+      throw new Error(`Error retrieving completion: ${error.message}`);
     }
   }
 
@@ -324,15 +344,12 @@ export class OpenAIService {
     if (!apiKey) throw new Error('OpenAI API key is not set');
 
     try {
-      const response = await this.client.get(`/threads/${threadId}/messages`, {
-        params: { limit: 100, order: 'asc' },
-        headers: this.authHeaders(apiKey)
-      });
+      const response = await this.makeRequest('GET', `/threads/${threadId}/messages?limit=100&order=asc`, undefined, apiKey);
 
-      if (response.data.data && response.data.data.length > 0) {
+      if (response.data && response.data.length > 0) {
         const messages: Array<{role: string, content: string}> = [];
         
-        for (const message of response.data.data) {
+        for (const message of response.data) {
           if (message.role === 'user' || message.role === 'assistant') {
             let textContent = '';
             if (message.content && message.content.length > 0) {
@@ -356,8 +373,8 @@ export class OpenAIService {
       
       return [];
     } catch (error: any) {
-      console.error('Error retrieving thread history:', error.response?.data || error.message);
-      throw new Error(`Failed to retrieve thread history: ${error.response?.data?.error?.message || error.message}`);
+      console.error('Error retrieving thread history:', error.message);
+      throw new Error(`Failed to retrieve thread history: ${error.message}`);
     }
   }
 
@@ -370,7 +387,7 @@ export class OpenAIService {
       try {
         const apiKey = await this.configService.getApiKey();
         if (apiKey) {
-          await this.client.post(`/threads/${this.threadId}/runs/${this.currentRunId}/cancel`, {}, { headers: this.authHeaders(apiKey) });
+          await this.makeRequest('POST', `/threads/${this.threadId}/runs/${this.currentRunId}/cancel`, {}, apiKey);
           console.log(`Cancelled run ${this.currentRunId}`);
         }
       } catch (error: any) {
@@ -421,8 +438,8 @@ export class OpenAIService {
       await this.configService.setActiveThreadId(this.threadId);
       await this.configService.setThreadId(this.threadId);
     } catch (error: any) {
-      console.error('Error resetting thread:', error.response?.data || error.message);
-      throw new Error(`Failed to reset thread: ${error.response?.data?.error?.message || error.message}`);
+      console.error('Error resetting thread:', error.message);
+      throw new Error(`Failed to reset thread: ${error.message}`);
     }
   }
 }
