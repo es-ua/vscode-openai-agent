@@ -3,7 +3,7 @@
   "name": "vscode-openai-agent",
   "displayName": "OpenAI Agent",
   "description": "AI coding assistant powered by OpenAI Assistants API",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "engines": {
     "vscode": "^1.60.0"
   },

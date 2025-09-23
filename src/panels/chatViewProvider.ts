@@ -25,6 +25,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
     this._view = webviewView;
+    this.openAI.setView(webviewView);
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri]
@@ -199,6 +200,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // Send current model to webview
         const currentModel = this.configService.getModel();
         webviewView.webview.postMessage({ type: 'modelChanged', model: currentModel });
+      } else if (msg.type === 'getSessionCost') {
+        // Send current session cost to webview
+        const sessionCost = this.openAI.getSessionCost();
+        webviewView.webview.postMessage({ type: 'sessionCost', cost: sessionCost });
+      } else if (msg.type === 'resetSessionCost') {
+        // Reset session cost
+        this.openAI.resetSessionCost();
+        webviewView.webview.postMessage({ type: 'sessionCost', cost: 0 });
       }
     });
   }
@@ -584,6 +593,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   #model-select:hover {
     border-color: var(--vscode-input-border);
   }
+  .cost-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    margin: 4px 0;
+  }
+  .cost-info .cost-label {
+    font-weight: 500;
+    color: var(--vscode-foreground);
+  }
+  .cost-info .cost-value {
+    color: var(--vscode-textLink-foreground);
+    font-weight: 600;
+  }
+  .cost-info .tokens-info {
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+  }
+  .cost-info .reset-btn {
+    background: transparent;
+    border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-foreground);
+    border-radius: 3px;
+    padding: 2px 6px;
+    cursor: pointer;
+    font-size: 10px;
+    transition: all 0.2s ease;
+  }
+  .cost-info .reset-btn:hover {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+  .paste-hint {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.7;
+    text-align: center;
+    margin-top: 4px;
+    padding: 2px 8px;
+  }
+  .paste-hint:hover {
+    opacity: 1;
+  }
 </style>
 </head>
 <body>
@@ -592,6 +650,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div id="tabs"></div>
   </div>
   <div id="messages"></div>
+  <div id="cost-info" class="cost-info" style="display: none;">
+    <span class="cost-label">Session Cost:</span>
+    <span class="cost-value" id="session-cost">$0.00</span>
+    <span class="tokens-info" id="tokens-info"></span>
+    <button class="reset-btn" id="reset-cost">Reset</button>
+    <span class="tokens-info" style="font-size: 9px; opacity: 0.7;">*Prices based on OpenAI API pricing</span>
+  </div>
   <form id="form">
     <div class="input-container">
       <div class="input-header">
@@ -603,7 +668,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         </button>
         <input type="file" id="file-input" multiple accept="image/*,.txt,.md,.js,.ts,.py,.json,.xml,.csv,.pdf" style="display: none;">
       </div>
-      <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send)" rows="1"></textarea>
+      <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send, Ctrl+V to paste images)" rows="1"></textarea>
     </div>
     <button type="submit">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -629,6 +694,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
     </select>
   </div>
+  <div class="paste-hint">
+    💡 Tip: You can paste images directly with Ctrl+V
+  </div>
   <script nonce="abc123">
     const vscode = acquireVsCodeApi();
     const messages = document.getElementById('messages');
@@ -640,11 +708,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const modelSelect = document.getElementById('model-select');
     const fileInput = document.getElementById('file-input');
     const fileUploadBtn = document.getElementById('file-upload-btn');
+    const costInfo = document.getElementById('cost-info');
+    const sessionCostEl = document.getElementById('session-cost');
+    const tokensInfoEl = document.getElementById('tokens-info');
+    const resetCostBtn = document.getElementById('reset-cost');
     const clearIcon = '${clearIcon}';
     const deleteIcon = '${deleteIcon}';
     
     // Store attached files
     let attachedFiles = [];
+    
+    // Cost tracking
+    let sessionCost = 0;
+    let lastTokens = { input: 0, output: 0, total: 0 };
+    let lastModel = '';
+
+    // Cost display functions
+    function updateCostDisplay(cost, totalCost, tokens, model) {
+      sessionCost = totalCost;
+      lastTokens = tokens;
+      lastModel = model;
+      
+      sessionCostEl.textContent = '$' + totalCost.toFixed(4);
+      tokensInfoEl.textContent = 'Last: ' + tokens.input + '→' + tokens.output + ' tokens (' + model + ')';
+      
+      if (totalCost > 0) {
+        costInfo.style.display = 'flex';
+      }
+    }
+
+    function resetCost() {
+      sessionCost = 0;
+      lastTokens = { input: 0, output: 0, total: 0 };
+      lastModel = '';
+      
+      sessionCostEl.textContent = '$0.00';
+      tokensInfoEl.textContent = '';
+      costInfo.style.display = 'none';
+      
+      vscode.postMessage({ type: 'resetSessionCost' });
+    }
 
     // File handling functions
     function createFilePreview(file) {
@@ -663,7 +766,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       createFilePreview(file).then(preview => {
         attachedFiles.push({ file, preview });
         updateAttachedFilesDisplay();
+        
+        // Show brief notification for pasted images
+        if (file.type.startsWith('image/')) {
+          showPasteNotification('Image pasted from clipboard');
+        }
       });
+    }
+
+    function showPasteNotification(message) {
+      // Create a temporary notification
+      const notification = document.createElement('div');
+      notification.style.cssText = 
+        'position: fixed;' +
+        'top: 20px;' +
+        'right: 20px;' +
+        'background: var(--vscode-button-background);' +
+        'color: var(--vscode-button-foreground);' +
+        'padding: 8px 16px;' +
+        'border-radius: 4px;' +
+        'font-size: 12px;' +
+        'z-index: 1000;' +
+        'box-shadow: 0 2px 8px rgba(0,0,0,0.2);' +
+        'opacity: 0;' +
+        'transition: opacity 0.3s ease;';
+      notification.textContent = message;
+      document.body.appendChild(notification);
+      
+      // Fade in
+      setTimeout(() => notification.style.opacity = '1', 10);
+      
+      // Fade out and remove
+      setTimeout(() => {
+        notification.style.opacity = '0';
+        setTimeout(() => document.body.removeChild(notification), 300);
+      }, 2000);
     }
 
     function removeAttachedFile(index) {
@@ -1028,6 +1165,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (modelSelect) {
           modelSelect.value = msg.model;
         }
+      } else if (msg.type === 'costUpdate') {
+        console.log('Cost update:', msg);
+        updateCostDisplay(msg.cost, msg.totalCost, msg.tokens, msg.model);
+      } else if (msg.type === 'sessionCost') {
+        console.log('Session cost:', msg.cost);
+        sessionCost = msg.cost;
+        sessionCostEl.textContent = '$' + msg.cost.toFixed(4);
+        if (msg.cost > 0) {
+          costInfo.style.display = 'flex';
+        }
       }
     });
 
@@ -1158,6 +1305,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ type: 'setModel', model: selectedModel });
     });
 
+    // Handle cost reset
+    resetCostBtn.addEventListener('click', () => {
+      resetCost();
+    });
+
     // Handle file upload
     fileUploadBtn.addEventListener('click', () => {
       fileInput.click();
@@ -1207,6 +1359,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Auto-resize on input
     prompt.addEventListener('input', autoResize);
+
+    // Handle paste events for images
+    function handlePasteEvent(e) {
+      const clipboardData = e.clipboardData || window.clipboardData;
+      if (!clipboardData) return;
+
+      const items = clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.indexOf('image') !== -1) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            // Check file size (limit to 10MB)
+            if (file.size > 10 * 1024 * 1024) {
+              alert('Image too large. Please select images smaller than 10MB.');
+              return;
+            }
+            addAttachedFile(file);
+            console.log('Image pasted from clipboard:', file.name, file.type, file.size);
+          }
+        }
+      }
+    }
+
+    // Add paste event listeners to both prompt and messages area
+    prompt.addEventListener('paste', handlePasteEvent);
+    messages.addEventListener('paste', handlePasteEvent);
 
     // Initial resize
     autoResize();

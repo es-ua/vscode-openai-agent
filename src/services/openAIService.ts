@@ -10,6 +10,8 @@ export class OpenAIService {
   private mcp: McpClient | null = null;
   private basePath: string;
   private currentRunId: string | undefined;
+  private sessionCost: number = 0;
+  private _view?: vscode.WebviewView;
 
   constructor(configService: ConfigurationService, basePath: string) {
     this.configService = configService;
@@ -19,6 +21,40 @@ export class OpenAIService {
 
   private authHeaders(apiKey: string) {
     return { 'Authorization': `Bearer ${apiKey}`, 'OpenAI-Beta': 'assistants=v2' };
+  }
+
+  // Pricing per 1M tokens (as of December 2024)
+  // Note: Prices are updated based on OpenAI's official pricing
+  // For the most accurate pricing, check: https://openai.com/api/pricing/
+  private getPricing(model: string): { input: number; output: number } {
+    const pricing: Record<string, { input: number; output: number }> = {
+      'gpt-4o': { input: 2.50, output: 10.00 },           // $2.50/$10.00 per 1M tokens
+      'gpt-4o-mini': { input: 0.15, output: 0.60 },       // $0.15/$0.60 per 1M tokens  
+      'gpt-4-turbo': { input: 10.00, output: 30.00 },     // $10.00/$30.00 per 1M tokens
+      'gpt-4-turbo-preview': { input: 10.00, output: 30.00 }, // $10.00/$30.00 per 1M tokens
+      'gpt-4': { input: 30.00, output: 60.00 },           // $30.00/$60.00 per 1M tokens
+      'gpt-3.5-turbo': { input: 0.50, output: 1.50 }      // $0.50/$1.50 per 1M tokens
+    };
+    return pricing[model] || { input: 0.15, output: 0.60 }; // Default to gpt-4o-mini pricing
+  }
+
+  private calculateCost(model: string, inputTokens: number, outputTokens: number): number {
+    const pricing = this.getPricing(model);
+    const inputCost = (inputTokens / 1000000) * pricing.input;
+    const outputCost = (outputTokens / 1000000) * pricing.output;
+    return inputCost + outputCost;
+  }
+
+  public getSessionCost(): number {
+    return this.sessionCost;
+  }
+
+  public resetSessionCost(): void {
+    this.sessionCost = 0;
+  }
+
+  public setView(view: vscode.WebviewView): void {
+    this._view = view;
   }
 
   private async makeRequest(method: string, endpoint: string, data?: any, apiKey?: string): Promise<any> {
@@ -83,6 +119,7 @@ export class OpenAIService {
       }
       
       this.assistantId = await this.getOrCreateAssistant(apiKey);
+      console.log('Assistant created with model:', currentModel, 'ID:', this.assistantId);
       const existing = this.configService.getActiveThreadId();
       if (existing) { this.threadId = existing; } else { this.threadId = await this.createThread(apiKey);
       const list = this.configService.getThreads();
@@ -273,6 +310,41 @@ export class OpenAIService {
           if (onThinking) {
             onThinking('Generating final response...');
           }
+          
+          // Get usage information and calculate cost
+          const usage = response.usage;
+          if (usage) {
+            // Get the actual model used from the response, fallback to config if not available
+            const model = response.model || this.configService.getModel();
+            const cost = this.calculateCost(model, usage.prompt_tokens || 0, usage.completion_tokens || 0);
+            this.sessionCost += cost;
+            
+            console.log('Cost calculation:', {
+              model: model,
+              inputTokens: usage.prompt_tokens || 0,
+              outputTokens: usage.completion_tokens || 0,
+              cost: cost,
+              totalCost: this.sessionCost,
+              responseModel: response.model,
+              configModel: this.configService.getModel()
+            });
+            
+            // Send cost information to the UI
+            if (this._view) {
+              this._view.webview.postMessage({ 
+                type: 'costUpdate', 
+                cost: cost,
+                totalCost: this.sessionCost,
+                tokens: {
+                  input: usage.prompt_tokens || 0,
+                  output: usage.completion_tokens || 0,
+                  total: usage.total_tokens || 0
+                },
+                model: model
+              });
+            }
+          }
+          
           return await this.getLastAssistantMessage(apiKey);
         } else if (status === 'failed' || status === 'cancelled' || status === 'expired') {
           throw new Error(`Run ${status}: ${response.last_error?.message || 'Unknown error'}`);
@@ -478,7 +550,7 @@ export class OpenAIService {
     // This ensures the new model is used
     console.log('Creating new assistant with model:', newModel);
     await this.configService.setAssistantId('');
-    await this.getOrCreateAssistant(apiKey);
-    console.log('New assistant created with model:', newModel);
+    this.assistantId = await this.getOrCreateAssistant(apiKey);
+    console.log('New assistant created with model:', newModel, 'ID:', this.assistantId);
   }
 }
