@@ -83,11 +83,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             : 'Analyzing your question...';
           webviewView.webview.postMessage({ type: 'thinking', content: thinkingContent });
           
-          // Create enhanced prompt with file information
+          // Create enhanced prompt with file information and content
           let enhancedPrompt = prompt;
           if (files.length > 0) {
-            const fileInfo = files.map(f => `- ${f.name} (${f.type}, ${Math.round(f.size/1024)}KB)`).join('\n');
-            enhancedPrompt = `Files attached:\n${fileInfo}\n\nQuestion: ${prompt}`;
+            console.log('Processing files:', files);
+            let fileSections: string[] = [];
+            
+            files.forEach(file => {
+              if (file.content) {
+                if (file.content.type === 'image') {
+                  fileSections.push(`\n--- IMAGE FILE: ${file.name} ---\n${file.content.description}\nBase64 data: ${file.content.data}`);
+                } else if (file.content.type === 'text') {
+                  fileSections.push(`\n--- TEXT FILE: ${file.name} ---\n${file.content.content}`);
+                } else if (file.content.type === 'binary') {
+                  fileSections.push(`\n--- FILE: ${file.name} ---\n${file.content.description}`);
+                }
+              } else {
+                // Fallback for old format
+                fileSections.push(`\n--- FILE: ${file.name} ---\nType: ${file.type}, Size: ${Math.round(file.size/1024)}KB`);
+              }
+            });
+            
+            enhancedPrompt = `Files attached:${fileSections.join('\n')}\n\nQuestion: ${prompt}`;
           }
           
           const res = await this.openAI.chat(enhancedPrompt, (thinkingStep: string) => {
@@ -166,8 +183,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // Send mode change confirmation to the webview
         webviewView.webview.postMessage({ type: 'modeChanged', mode: msg.mode });
       } else if (msg.type === 'setModel') {
+        console.log('Setting model to:', msg.model);
         // Update the model setting
         await this.configService.setModel(msg.model);
+        console.log('Model saved to config, current model:', this.configService.getModel());
+        // Update the assistant with the new model
+        try {
+          await this.openAI.updateAssistantModel();
+          console.log('Assistant model updated successfully');
+        } catch (error) {
+          console.error('Error updating assistant model:', error);
+        }
         webviewView.webview.postMessage({ type: 'modelChanged', model: msg.model });
       } else if (msg.type === 'getCurrentModel') {
         // Send current model to webview
@@ -282,27 +308,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   .attached-files {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin: 8px 0;
-    padding: 8px;
+    gap: 6px;
+    margin: 4px 0;
+    padding: 6px 8px;
     background: var(--vscode-editorWidget-background);
     border: 1px solid var(--vscode-panel-border);
-    border-radius: 6px;
+    border-radius: 4px;
+    font-size: 11px;
   }
   .attached-file {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
+    gap: 4px;
+    padding: 2px 6px;
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
-    border-radius: 4px;
-    font-size: 12px;
-    max-width: 200px;
+    border-radius: 3px;
+    font-size: 11px;
+    max-width: 150px;
   }
   .attached-file img {
-    width: 16px;
-    height: 16px;
+    width: 12px;
+    height: 12px;
     object-fit: cover;
     border-radius: 2px;
   }
@@ -378,12 +405,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   .input-container {
     display: flex;
     flex: 1;
-    gap: 8px;
-    align-items: flex-end;
+    flex-direction: column;
+    gap: 4px;
   }
-  .file-upload-container {
+  .input-header {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
+    padding: 0 4px;
   }
   #form.loading {
     background: var(--vscode-editorWidget-background);
@@ -423,7 +452,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     cursor: not-allowed; 
     background: var(--vscode-input-background);
   }
-  #form button { 
+  #form button[type="submit"], 
+  #form button[type="button"]:not(#file-upload-btn) { 
     padding: 10px 20px;
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
@@ -440,36 +470,70 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     justify-content: center;
   }
   #file-upload-btn {
-    padding: 8px;
-    min-width: auto;
-    border-radius: 50%;
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    border: 1px solid var(--vscode-button-secondaryBorder);
+    padding: 4px 8px !important;
+    min-width: auto !important;
+    width: auto !important;
+    height: 24px !important;
+    border-radius: 12px !important;
+    background: var(--vscode-button-secondaryBackground) !important;
+    color: var(--vscode-button-secondaryForeground) !important;
+    border: 1px solid var(--vscode-button-secondaryBorder) !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    justify-content: center !important;
+    opacity: 0.7 !important;
+    transition: all 0.2s ease !important;
+    font-size: 11px !important;
+    white-space: nowrap !important;
+    font-weight: normal !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
   }
   #file-upload-btn:hover:not(:disabled) {
-    background: var(--vscode-button-secondaryHoverBackground);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    background: var(--vscode-button-secondaryHoverBackground) !important;
+    opacity: 1 !important;
+    transform: scale(1.1) !important;
   }
-  #form button:hover:not(:disabled) { 
+  
+  /* Override any inherited button styles */
+  #form #file-upload-btn {
+    padding: 4px 8px !important;
+    min-width: auto !important;
+    width: auto !important;
+    height: 24px !important;
+    border-radius: 12px !important;
+    background: var(--vscode-button-secondaryBackground) !important;
+    color: var(--vscode-button-secondaryForeground) !important;
+    border: 1px solid var(--vscode-button-secondaryBorder) !important;
+    font-size: 11px !important;
+    font-weight: normal !important;
+  }
+  #form button[type="submit"]:hover:not(:disabled),
+  #form button[type="button"]:not(#file-upload-btn):hover:not(:disabled) { 
     background: var(--vscode-button-hoverBackground);
     transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
   }
-  #form button:active:not(:disabled) { 
+  #form button[type="submit"]:active:not(:disabled),
+  #form button[type="button"]:not(#file-upload-btn):active:not(:disabled) { 
     transform: translateY(0) scale(0.98);
   }
-  #form button:disabled { 
+  #form button[type="submit"]:disabled,
+  #form button[type="button"]:not(#file-upload-btn):disabled { 
     opacity: 0.5; 
     cursor: not-allowed; 
     transform: none;
     box-shadow: none;
   }
-  #form button svg {
+  #form button[type="submit"] svg,
+  #form button[type="button"]:not(#file-upload-btn) svg {
     transition: transform 0.2s ease;
   }
-  #form button:hover:not(:disabled) svg {
+  #form button[type="submit"]:hover:not(:disabled) svg,
+  #form button[type="button"]:not(#file-upload-btn):hover:not(:disabled) svg {
     transform: translateX(2px);
   }
   #mode-selector {
@@ -530,17 +594,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div id="messages"></div>
   <form id="form">
     <div class="input-container">
-      <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send)" rows="1"></textarea>
-      <div class="file-upload-container">
-        <input type="file" id="file-input" multiple accept="image/*,.txt,.md,.js,.ts,.py,.json,.xml,.csv,.pdf" style="display: none;">
-        <button type="button" id="file-upload-btn" title="Upload files or images">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-            <polyline points="7,10 12,15 17,10"></polyline>
-            <line x1="12" y1="15" x2="12" y2="3"></line>
+      <div class="input-header">
+        <button type="button" id="file-upload-btn" title="Add file">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.64 16.2a2 2 0 0 1-2.83-2.83l8.49-8.49"></path>
           </svg>
+          <span>Add file</span>
         </button>
+        <input type="file" id="file-input" multiple accept="image/*,.txt,.md,.js,.ts,.py,.json,.xml,.csv,.pdf" style="display: none;">
       </div>
+      <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send)" rows="1"></textarea>
     </div>
     <button type="submit">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -560,8 +623,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <select id="model-select">
       <option value="gpt-4o">GPT-4o</option>
       <option value="gpt-4o-mini">GPT-4o Mini</option>
-      <option value="gpt-4.1">GPT-4.1</option>
-      <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+      <option value="gpt-4-turbo">GPT-4 Turbo</option>
+      <option value="gpt-4-turbo-preview">GPT-4 Turbo Preview</option>
+      <option value="gpt-4">GPT-4</option>
+      <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
     </select>
   </div>
   <script nonce="abc123">
@@ -642,8 +707,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         filesContainer.appendChild(fileEl);
       });
       
-      // Insert before the form
-      form.parentNode.insertBefore(filesContainer, form);
+      // Insert inside the input-container, before the textarea
+      const inputContainer = document.querySelector('.input-container');
+      inputContainer.insertBefore(filesContainer, prompt);
     }
 
     let state = vscode.getState() || {}; if (!state.histories) state.histories = {}; if (typeof state.active === 'undefined') state.active = null;
@@ -763,10 +829,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     function setFormEnabled(enabled) {
       console.log('setFormEnabled called with:', enabled);
       const prompt = document.getElementById('prompt');
-      const submitBtn = document.querySelector('#form button');
+      // Try to find submit button, if not found try to find any button that's not file-upload-btn
+      let submitBtn = document.querySelector('#form button[type="submit"]');
+      if (!submitBtn) {
+        submitBtn = document.querySelector('#form button:not(#file-upload-btn)');
+      }
       const form = document.getElementById('form');
       
       console.log('Found submitBtn:', submitBtn);
+      console.log('All buttons in form:', document.querySelectorAll('#form button'));
       
       if (prompt) {
         prompt.disabled = !enabled;
@@ -977,36 +1048,96 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    function sendMessageWithFiles(text) {
-      // Create message content with files
-      const messageContent = {
-        text: text,
-        files: attachedFiles.map(fileData => ({
+    async function sendMessageWithFiles(text) {
+      // Read file contents
+      const filesWithContent = await Promise.all(attachedFiles.map(async (fileData) => {
+        const content = await readFileContent(fileData.file);
+        console.log('File content for', fileData.file.name, ':', content);
+        return {
           name: fileData.file.name,
           type: fileData.file.type,
           size: fileData.file.size,
-          preview: fileData.preview
-        }))
-      };
-
-      // Display user message with files
-      append('user', text, false, attachedFiles);
+          content: content
+        };
+      }));
       
-      // Clear form
+      console.log('Sending files with content:', filesWithContent);
+
+      // Store files for display before clearing
+      const filesToDisplay = [...attachedFiles];
+      
+      // Clear form first
       prompt.value = '';
       attachedFiles = [];
       updateAttachedFilesDisplay();
+      
+      // Display user message with files
+      append('user', text, false, filesToDisplay);
+      
+      // Force clear any remaining file displays
+      const existingDisplay = document.querySelector('.attached-files');
+      if (existingDisplay) {
+        existingDisplay.remove();
+      }
+      
       setFormEnabled(false);
       
       // Send to backend
       vscode.postMessage({ 
         type: 'sendPrompt', 
         prompt: text,
-        files: attachedFiles.map(fileData => ({
-          name: fileData.file.name,
-          type: fileData.file.type,
-          size: fileData.file.size
-        }))
+        files: filesWithContent
+      });
+    }
+
+    function readFileContent(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+          let content = e.target.result;
+          
+          // For images, we already have the preview, so we can use that
+          if (file.type.startsWith('image/')) {
+            resolve({
+              type: 'image',
+              data: content, // base64 data URL
+              description: 'Image file: ' + file.name + ' (' + file.type + ', ' + Math.round(file.size/1024) + 'KB)'
+            });
+          } else if (file.type.startsWith('text/') || 
+                     file.name.endsWith('.js') || 
+                     file.name.endsWith('.ts') || 
+                     file.name.endsWith('.py') || 
+                     file.name.endsWith('.json') || 
+                     file.name.endsWith('.md') || 
+                     file.name.endsWith('.txt') ||
+                     file.name.endsWith('.html') ||
+                     file.name.endsWith('.css') ||
+                     file.name.endsWith('.xml')) {
+            // For text files, read as text
+            resolve({
+              type: 'text',
+              content: content,
+              description: 'Text file: ' + file.name + ' (' + file.type + ', ' + Math.round(file.size/1024) + 'KB)'
+            });
+          } else {
+            // For other files, just provide metadata
+            resolve({
+              type: 'binary',
+              description: 'File: ' + file.name + ' (' + file.type + ', ' + Math.round(file.size/1024) + 'KB) - Binary content not readable'
+            });
+          }
+        };
+        
+        reader.onerror = function() {
+          reject(new Error('Failed to read file'));
+        };
+        
+        if (file.type.startsWith('image/')) {
+          reader.readAsDataURL(file);
+        } else {
+          reader.readAsText(file);
+        }
       });
     }
 

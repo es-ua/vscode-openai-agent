@@ -64,6 +64,21 @@ export class OpenAIService {
         console.warn('Failed to start MCP server, proceeding without tools:', e);
       }
 
+      // Clear any existing assistant to ensure we create a new one with the correct model
+      console.log('Clearing existing assistant to ensure correct model usage');
+      await this.configService.setAssistantId('');
+      
+      // Ensure we have a valid model set
+      const currentModel = this.configService.getModel();
+      console.log('Current model from config:', currentModel);
+      
+      // If model is invalid, set a default one
+      const validModels = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4-turbo-preview', 'gpt-4', 'gpt-3.5-turbo'];
+      if (!validModels.includes(currentModel)) {
+        console.log('Invalid model detected, setting default model');
+        await this.configService.setModel('gpt-4o-mini');
+      }
+      
       this.assistantId = await this.getOrCreateAssistant(apiKey);
       const existing = this.configService.getActiveThreadId();
       if (existing) { this.threadId = existing; } else { this.threadId = await this.createThread(apiKey);
@@ -85,6 +100,9 @@ export class OpenAIService {
 
   private async getOrCreateAssistant(apiKey: string): Promise<string> {
     const savedAssistantId = this.configService.getAssistantId();
+    const model = this.configService.getModel();
+    console.log('getOrCreateAssistant called with model:', model);
+    
     if (savedAssistantId) {
       try {
         await this.makeRequest('GET', `/assistants/${savedAssistantId}`, undefined, apiKey);
@@ -97,10 +115,12 @@ export class OpenAIService {
     try {
       let response;
       try {
+        const modelToUse = this.configService.getModel();
+        console.log('Creating assistant with model:', modelToUse);
         response = await this.makeRequest('POST', '/assistants', {
         name: 'VS Code Coding Assistant',
         description: 'An AI assistant that helps with coding in VS Code',
-        model: this.configService.getModel(),
+        model: modelToUse,
         tools: [
           { type: 'code_interpreter' },
           { type: 'function', function: { name: 'read_file', description: 'Read a file from the workspace', parameters: { type: 'object', properties: { path: { type: 'string' }, maxBytes: { type: 'number' } }, required: ['path'] } } },
@@ -441,5 +461,20 @@ export class OpenAIService {
       console.error('Error resetting thread:', error.message);
       throw new Error(`Failed to reset thread: ${error.message}`);
     }
+  }
+
+  public async updateAssistantModel(): Promise<void> {
+    const apiKey = await this.configService.getApiKey();
+    if (!apiKey) throw new Error('OpenAI API key is not set');
+    
+    const newModel = this.configService.getModel();
+    console.log('updateAssistantModel called - newModel:', newModel);
+    
+    // Always create a new assistant when model changes
+    // This ensures the new model is used
+    console.log('Creating new assistant with model:', newModel);
+    await this.configService.setAssistantId('');
+    await this.getOrCreateAssistant(apiKey);
+    console.log('New assistant created with model:', newModel);
   }
 }
