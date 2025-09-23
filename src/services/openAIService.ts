@@ -58,7 +58,10 @@ export class OpenAIService {
 
       try {
         this.mcp = new McpClient();
-        const root = this.basePath || process.cwd();
+        // Get the workspace folder path instead of extension path
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const root = workspaceFolder || process.cwd();
+        console.log('Starting MCP server with workspace path:', root);
         await this.mcp.start(root);
       } catch (e) {
         console.warn('Failed to start MCP server, proceeding without tools:', e);
@@ -130,7 +133,7 @@ export class OpenAIService {
           { type: 'function', function: { name: 'make_dir', description: 'Create a directory (recursive)', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
           { type: 'function', function: { name: 'delete_file', description: 'Delete a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }
         ],
-        instructions: `You are an AI programming assistant embedded in VS Code.\nYour primary role is to help users write code by providing intelligent code completions and suggestions.\nAnalyze the code context provided and generate relevant, high-quality code completions.\nFocus on producing working, efficient, and idiomatic code in the language being used.\nWhen possible, follow the coding style evident in the existing code.\nKeep your responses focused on code completion unless specifically asked for explanations.`
+        instructions: `You are an AI programming assistant embedded in VS Code.\nYour primary role is to help users write code by providing intelligent code completions and suggestions.\nAnalyze the code context provided and generate relevant, high-quality code completions.\nFocus on producing working, efficient, and idiomatic code in the language being used.\nWhen possible, follow the coding style evident in the existing code.\nKeep your responses focused on code completion unless specifically asked for explanations.\n\nIMPORTANT: When working with files, always use relative paths from the workspace root. The workspace root is the project directory that the user has open in VS Code, not the extension directory.`
       }, apiKey);
       } catch (e: any) {
         const msg = e?.message || '';
@@ -148,7 +151,8 @@ export class OpenAIService {
               { type: 'function', function: { name: 'append_file', description: 'Append content to a file (creates if missing)', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path','content'] } } },
               { type: 'function', function: { name: 'make_dir', description: 'Create a directory (recursive)', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
               { type: 'function', function: { name: 'delete_file', description: 'Delete a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }
-            ]
+            ],
+            instructions: `You are an AI programming assistant embedded in VS Code.\nYour primary role is to help users write code by providing intelligent code completions and suggestions.\nAnalyze the code context provided and generate relevant, high-quality code completions.\nFocus on producing working, efficient, and idiomatic code in the language being used.\nWhen possible, follow the coding style evident in the existing code.\nKeep your responses focused on code completion unless specifically asked for explanations.\n\nIMPORTANT: When working with files, always use relative paths from the workspace root. The workspace root is the project directory that the user has open in VS Code, not the extension directory.`
           }, apiKey);
         } else { throw e; }
       }

@@ -8,7 +8,9 @@ export class McpClient {
 
   async start(workspaceDir: string): Promise<void> {
     if (this.proc) return;
-    const serverPath = path.join(workspaceDir, 'mcp-server', 'server.js');
+    // Find the extension directory and use the MCP server from there
+    const extensionDir = path.dirname(__dirname);
+    const serverPath = path.join(extensionDir, '..', 'mcp-server', 'server.js');
     const proc = spawn(process.execPath, [serverPath], {
       env: { ...process.env, WORKSPACE_DIR: workspaceDir },
       stdio: ['pipe', 'pipe', 'inherit']
