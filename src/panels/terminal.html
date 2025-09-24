@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terminal</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #1e1e1e;
+      color: #f0f0f0;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 14px;
+      line-height: 1.5;
+      height: 100vh;
+      overflow: hidden;
+      position: relative;
+    }
+    
+    #stop-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background-color: #f44747;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      display: none;
+      z-index: 100;
+      transition: all 0.2s ease;
+    }
+    
+    #stop-button:hover {
+      background-color: #ff6b6b;
+      transform: scale(1.05);
+    }
+    
+    #stop-button:active {
+      transform: scale(0.95);
+    }
+    
+    #terminal {
+      height: 100%;
+      width: 100%;
+      padding: 10px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    
+    .command {
+      color: #569cd6;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    
+    .output {
+      color: #f0f0f0;
+    }
+    
+    .error {
+      color: #f44747;
+    }
+    
+    .success {
+      color: #6a9955;
+    }
+    
+    .prompt {
+      color: #569cd6;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <button id="stop-button">Stop Command</button>
+  
+  <script>
+    const terminal = document.getElementById('terminal');
+    const stopButton = document.getElementById('stop-button');
+    
+    // Функция для добавления текста в терминал
+    function appendToTerminal(text, className) {
+      const element = document.createElement('div');
+      element.className = className;
+      element.textContent = text;
+      terminal.appendChild(element);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+    
+    // Буфер для хранения вывода команды
+    let currentCommandOutput = {
+      command: '',
+      output: '',
+      errors: '',
+      isRunning: false,
+      startTime: 0
+    };
+    
+    // Обработчик кнопки остановки
+    stopButton.addEventListener('click', () => {
+      if (currentCommandOutput.isRunning) {
+        // Отправляем сообщение родительскому окну о необходимости остановить команду
+        window.parent.postMessage({
+          type: 'terminal-stop-command',
+          command: currentCommandOutput.command
+        }, '*');
+        
+        // Добавляем сообщение в терминал
+        appendToTerminal('Command stop requested...', 'error');
+        
+        // Скрываем кнопку остановки
+        stopButton.style.display = 'none';
+      }
+    });
+    
+    // Функция для анализа вывода команды
+    function analyzeCommandOutput() {
+      if (!currentCommandOutput.isRunning) return;
+      
+      // Проверяем наличие типичных ошибок
+      const hasErrors = currentCommandOutput.errors.length > 0;
+      const errorPatterns = [
+        'error:', 'Error:', 'ERROR:', 'exception:', 'Exception:', 
+        'failed', 'Failed', 'FAILED', 'не удалось', 'ошибка'
+      ];
+      
+      const successPatterns = [
+        'success', 'Success', 'SUCCESS', 'completed', 'Completed', 
+        'done', 'Done', 'готово', 'успешно'
+      ];
+      
+      let foundErrors = errorPatterns.some(pattern => 
+        currentCommandOutput.output.includes(pattern) || currentCommandOutput.errors.includes(pattern)
+      );
+      
+      let foundSuccess = successPatterns.some(pattern => 
+        currentCommandOutput.output.includes(pattern)
+      );
+      
+      // Отправляем результат анализа родительскому окну
+      window.parent.postMessage({
+        type: 'terminal-analysis',
+        command: currentCommandOutput.command,
+        output: currentCommandOutput.output,
+        errors: currentCommandOutput.errors,
+        hasErrors: hasErrors || foundErrors,
+        hasSuccess: foundSuccess,
+        duration: Date.now() - currentCommandOutput.startTime
+      }, '*');
+    }
+    
+    // Обработчик сообщений от родительского окна
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      
+      if (message.type === 'command') {
+        // Начало новой команды
+        currentCommandOutput = {
+          command: message.text,
+          output: '',
+          errors: '',
+          isRunning: true,
+          startTime: Date.now()
+        };
+        appendToTerminal('$ ' + message.text, 'command');
+        
+        // Показываем кнопку остановки
+        stopButton.style.display = 'block';
+      } else if (message.type === 'output') {
+        // Добавляем вывод
+        currentCommandOutput.output += message.text + '\n';
+        appendToTerminal(message.text, 'output');
+        // Анализируем вывод после каждого обновления
+        analyzeCommandOutput();
+      } else if (message.type === 'error') {
+        // Добавляем ошибки
+        currentCommandOutput.errors += message.text + '\n';
+        appendToTerminal(message.text, 'error');
+        // Анализируем вывод после каждой ошибки
+        analyzeCommandOutput();
+      } else if (message.type === 'success') {
+        appendToTerminal(message.text, 'success');
+        currentCommandOutput.output += message.text + '\n';
+        analyzeCommandOutput();
+      } else if (message.type === 'command-end') {
+        // Команда завершена
+        currentCommandOutput.isRunning = false;
+        analyzeCommandOutput();
+        
+        // Скрываем кнопку остановки
+        stopButton.style.display = 'none';
+      } else if (message.type === 'command-stopped') {
+        // Команда была остановлена пользователем
+        currentCommandOutput.isRunning = false;
+        currentCommandOutput.errors += '\nCommand was stopped by user.';
+        appendToTerminal('Command was stopped by user.', 'error');
+        analyzeCommandOutput();
+        
+        // Скрываем кнопку остановки
+        stopButton.style.display = 'none';
+      } else if (message.type === 'clear') {
+        terminal.innerHTML = '';
+        currentCommandOutput = {
+          command: '',
+          output: '',
+          errors: '',
+          isRunning: false,
+          startTime: 0
+        };
+      }
+    });
+    
+    // Сообщаем родительскому окну, что терминал готов
+    window.parent.postMessage({ type: 'terminal-ready' }, '*');
+    
+    // Добавляем приветствие
+    appendToTerminal('Terminal ready. Waiting for commands...', 'success');
+  </script>
+</body>
+</html>

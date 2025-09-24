@@ -3,7 +3,7 @@
   "name": "vscode-openai-agent",
   "displayName": "OpenAI Agent",
   "description": "AI coding assistant powered by OpenAI Assistants API",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -233,9 +233,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && cp src/panels/*.js out/panels/",
     "lint": "eslint src --ext ts",
-    "watch": "tsc -watch -p ./",
+    "watch": "tsc -watch -p ./ && cp src/panels/*.js out/panels/",
     "pretest": "npm run compile && npm run lint",
     "test": "node ./out/test/runTest.js"
   },

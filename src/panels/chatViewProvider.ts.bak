@@ -104,22 +104,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage(async msg => {
       if (!msg || !msg.type) return;
-      if (msg.type === 'cancelRequest') {
-        console.log('Received cancelRequest from webview');
-        if (this.isProcessing) {
-          try {
-            await this.openAI.cancelCurrentRun();
-            webviewView.webview.postMessage({ type: 'thinking', content: 'Request cancelled' });
-            setTimeout(() => {
-              webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: 'Request was cancelled.' });
-            }, 500);
-            this.isProcessing = false;
-          } catch (error) {
-            console.warn('Failed to cancel run:', error);
-            webviewView.webview.postMessage({ type: 'error', message: 'Failed to cancel request' });
-          }
-        }
-      } else if (msg.type === 'sendPrompt') {
+      if (msg.type === 'sendPrompt') {
         const prompt: string = msg.prompt || '';
         const files: any[] = msg.files || [];
         if (!prompt.trim() && files.length === 0) return;
@@ -291,28 +276,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // Remove specific permission
         this.openAI.removePermission(msg.command);
         webviewView.webview.postMessage({ type: 'permissionRemoved', command: msg.command });
-      } else if (msg.type === 'stopCommand') {
-        // Остановка выполнения команды
-        console.log('Stopping command:', msg.command);
-        try {
-          // Передаем запрос на остановку команды в OpenAI сервис
-          await this.openAI.stopCommand(msg.command);
-          // Отправляем сообщение об остановке команды в терминал
-          webviewView.webview.postMessage({ 
-            type: 'terminalOutput', 
-            command: msg.command, 
-            output: 'Command was stopped by user.', 
-            isError: true 
-          });
-        } catch (error) {
-          console.error('Error stopping command:', error);
-          webviewView.webview.postMessage({ 
-            type: 'terminalOutput', 
-            command: msg.command, 
-            output: `Failed to stop command: ${error}`, 
-            isError: true 
-          });
-        }
       }
     });
   }
@@ -322,13 +285,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const clearIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'clear_macos.svg')).toString();
     const deleteIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'close_macos.svg')).toString();
     
-    // Используем unsafe-inline для скриптов
-    const csp = `default-src 'none'; img-src ${webview.cspSource} https:; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'unsafe-inline' ${webview.cspSource};`;
+    // Simple CSP
+    const simpleCsp = `default-src 'none'; img-src ${webview.cspSource} https:; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'unsafe-inline' ${webview.cspSource};`;
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="${csp}">
+<meta http-equiv="Content-Security-Policy" content="${simpleCsp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <style>
   body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); margin: 0; display: flex; flex-direction: column; height: 100vh; }
@@ -645,14 +608,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     cursor: not-allowed; 
     transform: none;
     box-shadow: none;
-  }
-  #form button[type="submit"].stop {
-    background-color: var(--vscode-errorForeground);
-    border-color: var(--vscode-errorForeground);
-  }
-  #form button[type="submit"].stop:hover {
-    background-color: var(--vscode-errorForeground);
-    opacity: 0.9;
   }
   #form button[type="submit"] svg,
   #form button[type="button"]:not(#file-upload-btn) svg {
@@ -1041,9 +996,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <span class="terminal-title">Terminal</span>
       <button class="terminal-close" id="terminal-close">×</button>
     </div>
-    <div class="terminal-content">
-      <iframe id="terminal-iframe" style="width: 100%; height: 300px; border: none;" src="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'out', 'panels', 'terminal.html'))}"></iframe>
-    </div>
+    <div class="terminal-content" id="terminal-content"></div>
   </div>
   <form id="form">
     <div class="input-container">
@@ -1085,7 +1038,931 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div class="paste-hint">
     💡 Tip: You can paste images directly with Ctrl+V
   </div>
-  <script src="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'out', 'panels', 'chatView.js'))}"></script>
+  <script>
+    // Basic initialization
+    const vscode = acquireVsCodeApi();
+      
+      const messages = document.getElementById('messages');
+      const form = document.getElementById('form');
+      const prompt = document.getElementById('prompt');
+      const btnNew = document.getElementById('new');
+      const tabs = document.getElementById('tabs');
+      const modeSelect = document.getElementById('mode-select');
+      const modelSelect = document.getElementById('model-select');
+      const fileInput = document.getElementById('file-input');
+      const fileUploadBtn = document.getElementById('file-upload-btn');
+      const costInfo = document.getElementById('cost-info');
+      const sessionCostEl = document.getElementById('session-cost');
+      const tokensInfoEl = document.getElementById('tokens-info');
+      const resetCostBtn = document.getElementById('reset-cost');
+      const clearIcon = '${clearIcon}';
+      const deleteIcon = '${deleteIcon}';
+    
+      // Store attached files
+      let attachedFiles = [];
+      
+      // Cost tracking
+      let sessionCost = 0;
+      let lastTokens = { input: 0, output: 0, total: 0 };
+      let lastModel = '';
+
+      // Cost display functions
+      function updateCostDisplay(cost, totalCost, tokens, model) {
+        sessionCost = totalCost;
+        lastTokens = tokens;
+        lastModel = model;
+        
+        sessionCostEl.textContent = '$' + totalCost.toFixed(4);
+        tokensInfoEl.textContent = 'Last: ' + tokens.input + '→' + tokens.output + ' tokens (' + model + ')';
+        
+        if (totalCost > 0) {
+          costInfo.style.display = 'flex';
+        }
+      }
+
+      function resetCost() {
+        sessionCost = 0;
+        lastTokens = { input: 0, output: 0, total: 0 };
+        lastModel = '';
+        
+        sessionCostEl.textContent = '$0.00';
+        tokensInfoEl.textContent = '';
+        costInfo.style.display = 'none';
+        
+        vscode.postMessage({ type: 'resetSessionCost' });
+      }
+
+    // File handling functions
+    function createFilePreview(file) {
+      return new Promise((resolve) => {
+        if (file.type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.readAsDataURL(file);
+        } else {
+          resolve(null);
+        }
+      });
+    }
+
+    function addAttachedFile(file) {
+      createFilePreview(file).then(preview => {
+        attachedFiles.push({ file, preview });
+        updateAttachedFilesDisplay();
+        
+        // Show brief notification for pasted images
+        if (file.type.startsWith('image/')) {
+          showPasteNotification('Image pasted from clipboard');
+        }
+      });
+    }
+
+    function showPasteNotification(message) {
+      // Create a temporary notification
+      const notification = document.createElement('div');
+      notification.style.cssText = 
+        'position: fixed;' +
+        'top: 20px;' +
+        'right: 20px;' +
+        'background: var(--vscode-button-background);' +
+        'color: var(--vscode-button-foreground);' +
+        'padding: 8px 16px;' +
+        'border-radius: 4px;' +
+        'font-size: 12px;' +
+        'z-index: 1000;' +
+        'box-shadow: 0 2px 8px rgba(0,0,0,0.2);' +
+        'opacity: 0;' +
+        'transition: opacity 0.3s ease;';
+      notification.textContent = message;
+      document.body.appendChild(notification);
+      
+      // Fade in
+      setTimeout(() => notification.style.opacity = '1', 10);
+      
+      // Fade out and remove
+      setTimeout(() => {
+        notification.style.opacity = '0';
+        setTimeout(() => document.body.removeChild(notification), 300);
+      }, 2000);
+    }
+
+    function removeAttachedFile(index) {
+      attachedFiles.splice(index, 1);
+      updateAttachedFilesDisplay();
+    }
+
+    function updateAttachedFilesDisplay() {
+      const existingDisplay = document.querySelector('.attached-files');
+      if (existingDisplay) {
+        existingDisplay.remove();
+      }
+
+      if (attachedFiles.length === 0) return;
+
+      const filesContainer = document.createElement('div');
+      filesContainer.className = 'attached-files';
+      
+      attachedFiles.forEach((fileData, index) => {
+        const fileEl = document.createElement('div');
+        fileEl.className = 'attached-file';
+        
+        if (fileData.preview) {
+          const img = document.createElement('img');
+          img.src = fileData.preview;
+          img.alt = fileData.file.name;
+          fileEl.appendChild(img);
+        }
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'file-name';
+        nameSpan.textContent = fileData.file.name;
+        fileEl.appendChild(nameSpan);
+        
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.innerHTML = '×';
+        removeBtn.onclick = () => removeAttachedFile(index);
+        fileEl.appendChild(removeBtn);
+        
+        filesContainer.appendChild(fileEl);
+      });
+      
+      // Insert inside the input-container, before the textarea
+      const inputContainer = document.querySelector('.input-container');
+      inputContainer.insertBefore(filesContainer, prompt);
+    }
+
+    let state = vscode.getState() || {}; if (!state.histories) state.histories = {}; if (typeof state.active === 'undefined') state.active = null;
+
+    // Initialize model selector with current value
+    vscode.postMessage({ type: 'getCurrentModel' });
+
+    function setActive(id){ state.active = id; vscode.setState(state); }
+
+    function renderTabs(info){
+      console.log('renderTabs called with info:', info);
+      tabs.innerHTML='';
+      
+      if (!info || !info.threads || info.threads.length === 0) {
+        console.log('No threads to render');
+        return;
+      }
+      
+      console.log('Rendering', info.threads.length, 'threads');
+      
+      (info.threads||[]).forEach(id => {
+        const el = document.createElement('div');
+        el.className = 'tab' + (id === info.active ? ' active' : '');
+        
+        // Show thread name if available, otherwise show first 6 chars of ID
+        const threadName = (info.threadNames && info.threadNames[id]) || id.slice(0,6);
+        
+        // Create tab content
+        const tabContent = document.createElement('span');
+        tabContent.textContent = threadName;
+        tabContent.title = 'Thread: ' + id;
+        
+        // Create actions container
+        const actions = document.createElement('div');
+        actions.className = 'tab-actions';
+        
+        // Clear button
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'tab-btn';
+        clearBtn.title = 'Clear thread';
+        clearBtn.innerHTML = '<img src="' + clearIcon + '" alt="Clear"/>';
+        clearBtn.onclick = function(e) { 
+          e.stopPropagation(); 
+          if (state.active === id) {
+            state.histories[id] = []; 
+            vscode.setState(state); 
+            clearUI(); 
+          }
+        };
+        
+        // Close button
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'tab-btn';
+        closeBtn.title = 'Close thread';
+        closeBtn.innerHTML = '<img src="' + deleteIcon + '" alt="Close"/>';
+        closeBtn.onclick = function(e) { 
+          e.stopPropagation(); 
+          vscode.postMessage({ type:'closeThread', id: id }); 
+        };
+        
+        // Add elements to tab
+        actions.appendChild(clearBtn);
+        actions.appendChild(closeBtn);
+        el.appendChild(tabContent);
+        el.appendChild(actions);
+        
+        // Tab click handler
+        el.onclick = function() { 
+          showLoading('Switching to thread...', true);
+          vscode.postMessage({ type:'switchThread', id: id }); 
+        };
+        el.addEventListener('dblclick', function() { 
+          var newName = prompt('Enter thread name:', threadName);
+          if (newName && newName.trim()) {
+            vscode.postMessage({ type:'setThreadName', id: id, name: newName.trim() });
+          }
+        });
+        
+        tabs.appendChild(el);
+      });
+      setActive(info.active || null);
+    }
+
+    function clearUI(){ messages.innerHTML=''; }
+
+    function showLoading(text = 'Loading chat history...', showStopButton = false, blockForm = false) {
+      clearUI();
+      const loadingEl = document.createElement('div');
+      loadingEl.className = 'loading';
+      
+      let stopButtonHtml = '';
+      if (showStopButton) {
+        stopButtonHtml = '<button class="loading-stop" onclick="stopAI()">Stop</button>';
+      }
+      
+      loadingEl.innerHTML = '<div class="loading-spinner"></div><span class="loading-text">' + text + '</span>' + stopButtonHtml;
+      messages.appendChild(loadingEl);
+      
+      if (blockForm) {
+        setFormEnabled(false);
+      }
+    }
+
+    function hideLoading() {
+      const loadingEl = messages.querySelector('.loading');
+      if (loadingEl) {
+        loadingEl.remove();
+      }
+      setFormEnabled(true);
+    }
+
+    function stopAI() {
+      console.log('stopAI called');
+      hideLoading();
+      removeThinking();
+      setFormEnabled(true);
+      vscode.postMessage({ type: 'stopAI' });
+      append('assistant', 'Operation stopped by user', true);
+    }
+
+    function setFormEnabled(enabled) {
+      console.log('setFormEnabled called with:', enabled);
+      const prompt = document.getElementById('prompt');
+      // Try to find submit button, if not found try to find any button that's not file-upload-btn
+      let submitBtn = document.querySelector('#form button[type="submit"]');
+      if (!submitBtn) {
+        submitBtn = document.querySelector('#form button:not(#file-upload-btn)');
+      }
+      const form = document.getElementById('form');
+      
+      console.log('Found submitBtn:', submitBtn);
+      console.log('All buttons in form:', document.querySelectorAll('#form button'));
+      
+      if (prompt) {
+        prompt.disabled = !enabled;
+        prompt.placeholder = enabled ? 'Ask the OpenAI Agent...' : 'AI is thinking, please wait...';
+      }
+      if (submitBtn) {
+        console.log('Current button type:', submitBtn.type);
+        console.log('Current button innerHTML:', submitBtn.innerHTML);
+        if (enabled) {
+          console.log('Setting button to Send');
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22,2 15,22 11,13 2,9 22,2"></polygon></svg>Send';
+          submitBtn.onclick = null;
+          submitBtn.type = 'submit';
+          console.log('Button set to Send, new type:', submitBtn.type);
+        } else {
+          console.log('Setting button to Stop');
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>Stop';
+          submitBtn.onclick = function(e) { e.preventDefault(); stopAI(); };
+          submitBtn.type = 'button';
+          console.log('Button set to Stop, new type:', submitBtn.type);
+        }
+      } else {
+        console.error('Submit button not found!');
+      }
+      if (form) {
+        if (enabled) {
+          form.classList.remove('loading');
+        } else {
+          form.classList.add('loading');
+        }
+      }
+    }
+
+    // Make stopAI globally available
+    window.stopAI = stopAI;
+
+    function renderHistory(history = []){
+      clearUI();
+      // History is passed from server, not from local state
+      history.forEach(m => append(m.role, m.content, false));
+    }
+
+    function append(role, content, save=true, files=[]) {
+      console.log('append called with role:', role);
+      
+      // Safety checks
+      if (!content) content = '';
+      if (typeof content !== 'string') content = String(content);
+      
+      // Create elements
+      const el = document.createElement('div');
+      el.className = 'msg ' + role;
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'msg-content';
+      
+      const roleDiv = document.createElement('div');
+      roleDiv.className = 'msg-role';
+      roleDiv.textContent = role === 'assistant' ? 'AI:' : 'You:';
+      
+      const textDiv = document.createElement('div');
+      textDiv.className = 'msg-text';
+      
+      // Safely escape HTML and convert line breaks
+      const safeContent = content
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+        
+      // Use textContent first, then set innerHTML for line breaks
+      textDiv.textContent = '';
+      
+      // Split by line breaks and add them manually
+      const lines = safeContent.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) {
+          textDiv.appendChild(document.createElement('br'));
+        }
+        textDiv.appendChild(document.createTextNode(lines[i]));
+      }
+      
+      contentDiv.appendChild(roleDiv);
+      contentDiv.appendChild(textDiv);
+      
+      // Add file attachments if any
+      if (files && files.length > 0) {
+        const filesDiv = document.createElement('div');
+        filesDiv.className = 'attached-files';
+        
+        files.forEach(fileData => {
+          const fileEl = document.createElement('div');
+          fileEl.className = 'attached-file';
+          
+          if (fileData.preview) {
+            const img = document.createElement('img');
+            img.src = fileData.preview;
+            img.alt = fileData.file.name;
+            img.className = 'file-preview';
+            fileEl.appendChild(img);
+          }
+          
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'file-name';
+          nameSpan.textContent = fileData.file.name;
+          fileEl.appendChild(nameSpan);
+          
+          filesDiv.appendChild(fileEl);
+        });
+        
+        contentDiv.appendChild(filesDiv);
+      }
+      
+      el.appendChild(contentDiv);
+      console.log('Appending element to messages:', el);
+      messages.appendChild(el);
+      console.log('Messages children count after append:', messages.children.length);
+      messages.scrollTop = messages.scrollHeight;
+      console.log('Scroll position set to:', messages.scrollTop);
+      // Note: History is now stored on OpenAI server, not locally
+      // Local state is only used for UI state and thinking process
+    }
+
+    function appendThinking(content) {
+      const el = document.createElement('div');
+      el.className = 'thinking';
+      
+      const header = document.createElement('div');
+      header.className = 'thinking-header';
+      header.innerHTML = '<svg class="thinking-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>AI is thinking...';
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'thinking-content';
+      contentDiv.textContent = content;
+      
+      el.appendChild(header);
+      el.appendChild(contentDiv);
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function updateThinking(content) {
+      const thinkingEl = messages.querySelector('.thinking .thinking-content');
+      if (thinkingEl) {
+        thinkingEl.textContent = content;
+        messages.scrollTop = messages.scrollHeight;
+      }
+    }
+
+    function removeThinking() {
+      const thinkingEl = messages.querySelector('.thinking');
+      if (thinkingEl) {
+        thinkingEl.remove();
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (msg.type === 'append') {
+        console.log('Received append message, restoring form');
+        console.log('Message content:', msg.content);
+        console.log('Message role:', msg.role);
+        hideLoading();
+        removeThinking();
+        console.log('About to call setFormEnabled(true)');
+        setFormEnabled(true);
+        console.log('About to call append with:', { role: msg.role, content: msg.content });
+        append(msg.role, msg.content, true);
+        console.log('append call completed');
+      } else if (msg.type === 'thinking') {
+        hideLoading();
+        setFormEnabled(false);
+        if (msg.content) {
+          appendThinking(msg.content);
+        }
+      } else if (msg.type === 'updateThinking') {
+        if (msg.content) {
+          updateThinking(msg.content);
+        }
+      } else if (msg.type === 'error') {
+        hideLoading();
+        removeThinking();
+        setFormEnabled(true);
+        append('assistant', 'Error: ' + msg.message, true);
+      } else if (msg.type === 'threads') {
+        console.log('Received threads message:', msg);
+        const ids = (msg.info && msg.info.threads) || [];
+        const active = (msg.info && msg.info.active) || null;
+        console.log('Thread IDs:', ids);
+        console.log('Active thread:', active);
+        if (!active || !ids.includes(active)) { state.active = ids.length ? ids[ids.length-1] : null; vscode.setState(state); }
+        console.log('State active after update:', state.active);
+        renderTabs(msg.info);
+        // Always load history from server
+        if (state.active) {
+          console.log('Showing loading for active thread:', state.active);
+          showLoading('Loading chat history...', true);
+        }
+      } else if (msg.type === 'loadHistory') {
+        // Load history from server
+        hideLoading();
+        if (state.active && msg.history) {
+          renderHistory(msg.history);
+        }
+      } else if (msg.type === 'clear') {
+        hideLoading();
+        clearUI();
+      } else if (msg.type === 'restoreForm') {
+        console.log('Received restoreForm message, restoring form');
+        hideLoading();
+        removeThinking();
+        setFormEnabled(true);
+      } else if (msg.type === 'modeChanged') {
+        console.log('Mode changed to:', msg.mode);
+        // Update the select element to reflect the new mode
+        if (modeSelect) {
+          modeSelect.value = msg.mode;
+        }
+      } else if (msg.type === 'modelChanged') {
+        console.log('Model changed to:', msg.model);
+        // Update the select element to reflect the new model
+        if (modelSelect) {
+          modelSelect.value = msg.model;
+        }
+      } else if (msg.type === 'costUpdate') {
+        console.log('Cost update:', msg);
+        updateCostDisplay(msg.cost, msg.totalCost, msg.tokens, msg.model);
+      } else if (msg.type === 'sessionCost') {
+        console.log('Session cost:', msg.cost);
+        sessionCost = msg.cost;
+        sessionCostEl.textContent = '$' + msg.cost.toFixed(4);
+        if (msg.cost > 0) {
+          costInfo.style.display = 'flex';
+        }
+      } else if (msg.type === 'requestPermission') {
+        console.log('Permission request:', msg);
+        showPermissionRequest(msg.command, msg.description);
+      } else if (msg.type === 'permissionStats') {
+        console.log('Permission stats:', msg.stats);
+        const stats = msg.stats;
+        const permissionStatsEl = document.getElementById('permission-stats');
+        const permissionAutoEl = document.getElementById('permission-auto');
+        if (permissionStatsEl) {
+          permissionStatsEl.textContent = stats.allowed + ' allowed, ' + stats.denied + ' denied';
+        }
+        if (permissionAutoEl) {
+          if (stats.autoApprove) {
+            permissionAutoEl.textContent = 'Disable Auto-approve';
+          } else {
+            permissionAutoEl.textContent = 'Auto-approve';
+          }
+        }
+      } else if (msg.type === 'allPermissions') {
+        console.log('All permissions:', msg.permissions);
+        // TODO: Show permissions management dialog
+      } else if (msg.type === 'autoApproveChanged') {
+        console.log('Auto-approve changed:', msg.enabled);
+        const permissionAutoEl = document.getElementById('permission-auto');
+        if (permissionAutoEl) {
+          if (msg.enabled) {
+            permissionAutoEl.textContent = 'Disable Auto-approve';
+          } else {
+            permissionAutoEl.textContent = 'Auto-approve';
+          }
+        }
+      } else if (msg.type === 'permissionsCleared') {
+        console.log('Permissions cleared');
+        vscode.postMessage({ type: 'getPermissionStats' });
+      } else if (msg.type === 'permissionRemoved') {
+        console.log('Permission removed:', msg.command);
+        vscode.postMessage({ type: 'getPermissionStats' });
+      } else if (msg.type === 'streamOutput') {
+        console.log('Stream output:', msg);
+        showStreamOutput();
+        appendStreamOutput(msg.output, msg.isError);
+      } else if (msg.type === 'terminalOutput') {
+        console.log('Terminal output:', msg);
+        showTerminalOutput();
+        if (msg.command) {
+          appendTerminalCommand(msg.command);
+        }
+        if (msg.output) {
+          appendTerminalOutput(msg.output, msg.type || 'output');
+        }
+      } else if (msg.type === 'terminalCommand') {
+        console.log('Terminal command:', msg);
+        showTerminalOutput();
+        appendTerminalCommand(msg.command);
+      }
+    });
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const value = prompt.value || '';
+      if (!value.trim() && attachedFiles.length === 0) return;
+      
+      // If already processing, stop current operation and start new one
+      if (document.querySelector('.thinking')) {
+        stopAI();
+        // Small delay to ensure stop is processed
+        setTimeout(() => {
+          sendMessageWithFiles(value);
+        }, 100);
+      } else {
+        sendMessageWithFiles(value);
+      }
+    });
+
+    async function sendMessageWithFiles(text) {
+      // Read file contents
+      const filesWithContent = await Promise.all(attachedFiles.map(async (fileData) => {
+        const content = await readFileContent(fileData.file);
+        console.log('File content for', fileData.file.name, ':', content);
+        return {
+          name: fileData.file.name,
+          type: fileData.file.type,
+          size: fileData.file.size,
+          content: content
+        };
+      }));
+      
+      console.log('Sending files with content:', filesWithContent);
+
+      // Store files for display before clearing
+      const filesToDisplay = [...attachedFiles];
+      
+      // Clear form first
+      prompt.value = '';
+      attachedFiles = [];
+      updateAttachedFilesDisplay();
+      
+      // Display user message with files
+      append('user', text, false, filesToDisplay);
+      
+      // Force clear any remaining file displays
+      const existingDisplay = document.querySelector('.attached-files');
+      if (existingDisplay) {
+        existingDisplay.remove();
+      }
+      
+      setFormEnabled(false);
+      
+      // Send to backend
+      vscode.postMessage({ 
+        type: 'sendPrompt', 
+        prompt: text,
+        files: filesWithContent
+      });
+    }
+
+    function readFileContent(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+          let content = e.target.result;
+          
+          // For images, we already have the preview, so we can use that
+          if (file.type.startsWith('image/')) {
+            resolve({
+              type: 'image',
+              data: content, // base64 data URL
+              description: 'Image file: ' + file.name + ' (' + file.type + ', ' + Math.round(file.size/1024) + 'KB)'
+            });
+          } else if (file.type.startsWith('text/') || 
+                     file.name.endsWith('.js') || 
+                     file.name.endsWith('.ts') || 
+                     file.name.endsWith('.py') || 
+                     file.name.endsWith('.json') || 
+                     file.name.endsWith('.md') || 
+                     file.name.endsWith('.txt') ||
+                     file.name.endsWith('.html') ||
+                     file.name.endsWith('.css') ||
+                     file.name.endsWith('.xml')) {
+            // For text files, read as text
+            resolve({
+              type: 'text',
+              content: content,
+              description: 'Text file: ' + file.name + ' (' + file.type + ', ' + Math.round(file.size/1024) + 'KB)'
+            });
+          } else {
+            // For other files, just provide metadata
+            resolve({
+              type: 'binary',
+              description: 'File: ' + file.name + ' (' + file.type + ', ' + Math.round(file.size/1024) + 'KB) - Binary content not readable'
+            });
+          }
+        };
+        
+        reader.onerror = function() {
+          reject(new Error('Failed to read file'));
+        };
+        
+        if (file.type.startsWith('image/')) {
+          reader.readAsDataURL(file);
+        } else {
+          reader.readAsText(file);
+        }
+      });
+    }
+
+    btnNew.addEventListener('click', () => {
+      showLoading('Creating new thread...');
+      vscode.postMessage({ type:'newThread' });
+    });
+
+    // Handle mode switching
+    modeSelect.addEventListener('change', (e) => {
+      const selectedMode = e.target.value;
+      vscode.postMessage({ type: 'setMode', mode: selectedMode });
+    });
+
+    // Handle model switching
+    modelSelect.addEventListener('change', (e) => {
+      const selectedModel = e.target.value;
+      vscode.postMessage({ type: 'setModel', model: selectedModel });
+    });
+
+    // Handle cost reset
+    resetCostBtn.addEventListener('click', () => {
+      resetCost();
+    });
+
+    // Permission handling
+    const permissionInfo = document.getElementById('permission-info');
+    const permissionStats = document.getElementById('permission-stats');
+    const permissionManage = document.getElementById('permission-manage');
+    const permissionAuto = document.getElementById('permission-auto');
+    const permissionRequest = document.getElementById('permission-request');
+    const permissionDescription = document.getElementById('permission-description');
+    const permissionAllow = document.getElementById('permission-allow');
+    const permissionDeny = document.getElementById('permission-deny');
+    const permissionRemember = document.getElementById('permission-remember');
+
+    let currentPermissionCommand = '';
+
+    // Show permission info
+    function showPermissionInfo() {
+      permissionInfo.style.display = 'flex';
+      vscode.postMessage({ type: 'getPermissionStats' });
+    }
+
+    // Hide permission info
+    function hidePermissionInfo() {
+      permissionInfo.style.display = 'none';
+    }
+
+    // Show permission request
+    function showPermissionRequest(command, description) {
+      currentPermissionCommand = command;
+      permissionDescription.textContent = description;
+      permissionRequest.style.display = 'block';
+    }
+
+    // Hide permission request
+    function hidePermissionRequest() {
+      permissionRequest.style.display = 'none';
+      currentPermissionCommand = '';
+    }
+
+    // Handle permission responses
+    permissionAllow.addEventListener('click', () => {
+      vscode.postMessage({ 
+        type: 'permissionResponse', 
+        command: currentPermissionCommand, 
+        allowed: true 
+      });
+      hidePermissionRequest();
+    });
+
+    permissionDeny.addEventListener('click', () => {
+      vscode.postMessage({ 
+        type: 'permissionResponse', 
+        command: currentPermissionCommand, 
+        allowed: false 
+      });
+      hidePermissionRequest();
+    });
+
+    permissionRemember.addEventListener('click', () => {
+      vscode.postMessage({ 
+        type: 'permissionResponse', 
+        command: currentPermissionCommand, 
+        allowed: true,
+        remember: true 
+      });
+      hidePermissionRequest();
+    });
+
+    // Handle permission management
+    permissionManage.addEventListener('click', () => {
+      vscode.postMessage({ type: 'getAllPermissions' });
+    });
+
+    // Handle auto-approve toggle
+    permissionAuto.addEventListener('click', () => {
+      const isAuto = permissionAuto.textContent === 'Auto-approve';
+      vscode.postMessage({ type: 'setAutoApprove', enabled: !isAuto });
+    });
+
+    // Show permission info by default
+    showPermissionInfo();
+
+    // Stream output handling
+    const streamOutput = document.getElementById('stream-output');
+    const streamContent = document.getElementById('stream-content');
+    const streamClose = document.getElementById('stream-close');
+
+    function showStreamOutput() {
+      streamOutput.style.display = 'flex';
+    }
+
+    function hideStreamOutput() {
+      streamOutput.style.display = 'none';
+      streamContent.textContent = '';
+    }
+
+    function appendStreamOutput(output, isError = false) {
+      const line = document.createElement('div');
+      line.className = 'stream-line' + (isError ? ' error' : '');
+      line.textContent = output;
+      streamContent.appendChild(line);
+      streamContent.scrollTop = streamContent.scrollHeight;
+    }
+
+    // Handle stream close button
+    streamClose.addEventListener('click', hideStreamOutput);
+
+    // Terminal output handling
+    const terminalOutput = document.getElementById('terminal-output');
+    const terminalContent = document.getElementById('terminal-content');
+    const terminalClose = document.getElementById('terminal-close');
+
+    function showTerminalOutput() {
+      terminalOutput.style.display = 'flex';
+    }
+
+    function hideTerminalOutput() {
+      terminalOutput.style.display = 'none';
+      terminalContent.textContent = '';
+    }
+
+    function appendTerminalOutput(output, type = 'output') {
+      const line = document.createElement('div');
+      line.className = 'terminal-line ' + type;
+      line.textContent = output;
+      terminalContent.appendChild(line);
+      terminalContent.scrollTop = terminalContent.scrollHeight;
+    }
+
+    function appendTerminalCommand(command) {
+      appendTerminalOutput('$ ' + command, 'command');
+    }
+
+    // Handle terminal close button
+    terminalClose.addEventListener('click', hideTerminalOutput);
+
+    // Handle file upload
+    fileUploadBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      files.forEach(file => {
+        // Check file size (limit to 10MB)
+        if (file.size > 10 * 1024 * 1024) {
+          alert('File size too large. Please select files smaller than 10MB.');
+          return;
+        }
+        addAttachedFile(file);
+      });
+      // Clear the input so the same file can be selected again
+      e.target.value = '';
+    });
+
+    // Handle Enter and Ctrl+Enter for textarea
+    prompt.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        if (e.ctrlKey) {
+          // Ctrl+Enter: Add new line
+          e.preventDefault();
+          const start = prompt.selectionStart;
+          const end = prompt.selectionEnd;
+          const value = prompt.value;
+          prompt.value = value.substring(0, start) + '\n' + value.substring(end);
+          prompt.selectionStart = prompt.selectionEnd = start + 1;
+          autoResize();
+        } else {
+          // Enter: Send message
+          e.preventDefault();
+          form.dispatchEvent(new Event('submit'));
+        }
+      }
+    });
+
+    // Auto-resize textarea based on content
+    function autoResize() {
+      prompt.style.height = 'auto';
+      const scrollHeight = prompt.scrollHeight;
+      const maxHeight = 36; // max-height from CSS (1.5 lines)
+      prompt.style.height = Math.min(scrollHeight, maxHeight) + 'px';
+    }
+
+    // Auto-resize on input
+    prompt.addEventListener('input', autoResize);
+
+    // Handle paste events for images
+    function handlePasteEvent(e) {
+      const clipboardData = e.clipboardData || window.clipboardData;
+      if (!clipboardData) return;
+
+      const items = clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.indexOf('image') !== -1) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            // Check file size (limit to 10MB)
+            if (file.size > 10 * 1024 * 1024) {
+              alert('Image too large. Please select images smaller than 10MB.');
+              return;
+            }
+            addAttachedFile(file);
+            console.log('Image pasted from clipboard:', file.name, file.type, file.size);
+          }
+        }
+      }
+    }
+
+    // Add paste event listeners to both prompt and messages area
+    prompt.addEventListener('paste', handlePasteEvent);
+    messages.addEventListener('paste', handlePasteEvent);
+
+    // Initial resize
+    autoResize();
+  </script>
 </body>
 </html>`;
   }

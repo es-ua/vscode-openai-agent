@@ -1,0 +1,41 @@
+{
+  "permissions": [
+    {
+      "command": "test_mcp",
+      "allowed": true,
+      "timestamp": 1758640288601,
+      "description": "Test MCP server connection",
+      "remembered": true
+    },
+    {
+      "command": "run_command",
+      "allowed": false,
+      "timestamp": 1758640288601,
+      "description": "Run shell command",
+      "remembered": true
+    },
+    {
+      "command": "run_vscode_extension",
+      "allowed": true,
+      "timestamp": 1758724840632,
+      "description": "Run VS Code extension in development mode",
+      "remembered": true
+    },
+    {
+      "command": "build_project",
+      "allowed": true,
+      "timestamp": 1758725531606,
+      "description": "Build project",
+      "remembered": true
+    },
+    {
+      "command": "run_project",
+      "allowed": true,
+      "timestamp": 1758752464667,
+      "description": "Run project (auto-detecting type and running appropriate command)",
+      "remembered": false
+    }
+  ],
+  "autoApprove": false,
+  "lastUpdated": 1758752464667
+}
