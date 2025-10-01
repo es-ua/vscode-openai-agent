@@ -7,6 +7,7 @@ export interface OpenAIServiceInterface {
   chat(prompt: string, onThinking?: (step: string) => void): Promise<string>;
   newThread(): Promise<string>;
   getThreadInfo(): { threads: string[]; active: string | undefined; threadNames: { [id: string]: string } };
+  getCurrentThread(): any;
   getThreadHistory(threadId: string): Promise<any[]>;
   setActiveThread(threadId: string): Promise<void>;
   setThreadName(threadId: string, name: string): Promise<void>;
@@ -22,4 +23,5 @@ export interface OpenAIServiceInterface {
   addImage(imageData: Buffer, description: string): Promise<string>;
   addAudio(audioData: Buffer, filename: string, description: string): Promise<string>;
   transcribeAudio(audioData: Buffer, filename: string, language?: string, onProgress?: (progress: number) => void): Promise<string>;
+  transcribeAudioByFilename(filename: string, language?: string, onProgress?: (progress: number) => void): Promise<string>;
 }

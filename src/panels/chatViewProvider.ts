@@ -122,8 +122,82 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             webviewView.webview.postMessage({ type: 'updateThinking', content: step });
           });
           console.log('Chat response received:', response);
-          // Отправляем ответ AI в webview
-          webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: response });
+          
+          // Проверяем, нужно ли транскрибировать аудиофайл
+          // Ищем упоминание транскрипции в ответе AI
+          const transcriptionKeywords = /(транскрипц|расшифр|расшифруй|расшифровать)/i;
+          const hasTranscriptionRequest = transcriptionKeywords.test(response);
+          
+          if (hasTranscriptionRequest) {
+            // Ищем аудиофайлы в текущем thread
+            const thread = await this.openAI.getCurrentThread();
+            const audioMessages = thread.messages.filter(msg => 
+              msg.metadata && 
+              msg.metadata.filename && 
+              /\.(mp3|m4a|mp4|wav|ogg)$/i.test(msg.metadata.filename)
+            );
+            
+            if (audioMessages.length > 0) {
+              // Берём последний загруженный аудиофайл
+              const lastAudio = audioMessages[audioMessages.length - 1];
+              const filename = lastAudio.metadata.filename;
+              
+              console.log(`Detected transcription request for: ${filename}`);
+              
+              // Отправляем ответ AI БЕЗ сброса кнопки (транскрипция идёт)
+              console.log('Sending AI response with keepProcessing: true');
+              webviewView.webview.postMessage({ 
+                type: 'append', 
+                role: 'assistant', 
+                content: response,
+                keepProcessing: true // Флаг что транскрипция идёт
+              });
+              
+              // Запускаем транскрипцию
+              try {
+                const config = vscode.workspace.getConfiguration('openaiAgent');
+                const transcriptionLanguage = config.get<string>('audio.transcriptionLanguage') || undefined;
+                
+                const transcription = await this.openAI.transcribeAudioByFilename(
+                  filename,
+                  transcriptionLanguage,
+                  (progress: number) => {
+                    webviewView.webview.postMessage({
+                      type: 'transcriptionProgress',
+                      progress: progress,
+                      filename: filename
+                    });
+                  }
+                );
+                
+                // Результат транскрипции - теперь можно сбросить кнопку
+                console.log('Sending transcription result with keepProcessing: false');
+                webviewView.webview.postMessage({
+                  type: 'append',
+                  role: 'assistant',
+                  content: `📝 Транскрипция файла "${filename}":\n\n${transcription}`,
+                  keepProcessing: false // Завершаем обработку
+                });
+              } catch (transcribeError: any) {
+                console.error('Auto-transcription error:', transcribeError);
+                webviewView.webview.postMessage({ 
+                  type: 'error', 
+                  message: `Ошибка транскрипции: ${transcribeError.message}`,
+                  keepProcessing: false // Сбрасываем кнопку при ошибке
+                });
+              }
+            } else {
+              // Нет аудиофайлов для транскрипции
+              console.log('Transcription requested but no audio files found');
+              webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: response });
+            }
+          } else {
+            // Обычный ответ без транскрипции
+            webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: response });
+          }
+          
+          // Обновляем список потоков (название могло измениться)
+          postThreads();
         } catch (error: any) {
           console.error('Error in chat:', error);
           webviewView.webview.postMessage({ type: 'error', message: error.message });
@@ -235,23 +309,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       } else if (msg.type === 'pasteImage') {
         try {
-          // Handle image data from clipboard
+          // Handle image data (frontend уже показал файл в чате)
           const imageData = Buffer.from(msg.imageData, 'base64');
-          const imageId = await this.openAI.addImage(imageData, msg.description || 'Pasted image');
-          webviewView.webview.postMessage({ type: 'append', role: 'user', content: `[Image: ${msg.description || 'Pasted image'}]` });
+          const imageId = await this.openAI.addImage(imageData, msg.description || 'Uploaded image');
+          // Не отправляем дублирующее сообщение - frontend уже показал файл
+          // Отправляем сигнал завершения обработки
+          webviewView.webview.postMessage({ type: 'imageUploaded', description: msg.description });
         } catch (error: any) {
           console.error('Error processing image:', error);
           webviewView.webview.postMessage({ type: 'error', message: `Error processing image: ${error.message}` });
         }
       } else if (msg.type === 'uploadAudio') {
         try {
-          // Handle audio file upload
+          // Handle audio file upload (без автоматической транскрипции)
           const audioData = Buffer.from(msg.audioData, 'base64');
+          
+          // Добавляем аудио в RAG систему для последующей транскрипции по запросу
           const audioId = await this.openAI.addAudio(audioData, msg.filename, msg.description || 'Uploaded audio file');
-          webviewView.webview.postMessage({ type: 'append', role: 'user', content: `[Audio: ${msg.filename || 'Uploaded audio file'}]` });
+          
+          // Не отправляем дублирующее сообщение - frontend уже показал файл
+          // Отправляем сигнал завершения обработки
+          webviewView.webview.postMessage({ type: 'audioUploaded', filename: msg.filename });
         } catch (error: any) {
           console.error('Error processing audio:', error);
           webviewView.webview.postMessage({ type: 'error', message: `Error processing audio: ${error.message}` });
+        }
+      } else if (msg.type === 'uploadFile') {
+        try {
+          // Handle universal file upload (PDF, text, etc.)
+          const fileData = Buffer.from(msg.fileData, 'base64');
+          const fileType = msg.fileType || 'application/octet-stream';
+          
+          // Добавляем файл в RAG систему как текстовый контекст
+          const thread = await this.openAI.getThreadInfo();
+          const chatMessage = {
+            id: Date.now().toString(),
+            content: `User uploaded file: ${msg.filename} (${fileType})`,
+            chatId: thread.active || 'default',
+            timestamp: new Date().toISOString(),
+          };
+          
+          // Можно добавить обработку конкретных типов файлов
+          console.log(`File uploaded: ${msg.filename}, type: ${fileType}, size: ${fileData.length} bytes`);
+          
+          // Не отправляем дублирующее сообщение - frontend уже показал файл
+          // Отправляем сигнал завершения обработки
+          webviewView.webview.postMessage({ type: 'fileUploaded', filename: msg.filename });
+        } catch (error: any) {
+          console.error('Error processing file:', error);
+          webviewView.webview.postMessage({ type: 'error', message: `Error processing file: ${error.message}` });
         }
       } else if (msg.type === 'transcribeAudio') {
         try {
@@ -272,11 +378,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           );
           webviewView.webview.postMessage({ 
             type: 'append', 
-            role: 'user', 
-            content: `[Audio Transcription: ${msg.filename}]\n${transcription}` 
+            role: 'assistant', 
+            content: `📝 Транскрипция файла "${msg.filename}":\n\n${transcription}` 
           });
         } catch (error: any) {
           console.error('Error transcribing audio:', error);
+          webviewView.webview.postMessage({ type: 'error', message: `Error transcribing audio: ${error.message}` });
+        }
+      } else if (msg.type === 'transcribeAudioByFilename') {
+        try {
+          // Транскрибация аудио по имени файла из текущего чата
+          const config = vscode.workspace.getConfiguration('openaiAgent');
+          const transcriptionLanguage = msg.language || config.get<string>('audio.transcriptionLanguage') || undefined;
+          
+          const transcription = await this.openAI.transcribeAudioByFilename(
+            msg.filename,
+            transcriptionLanguage,
+            (progress: number) => {
+              webviewView.webview.postMessage({
+                type: 'transcriptionProgress',
+                progress: progress,
+                filename: msg.filename
+              });
+            }
+          );
+          
+          webviewView.webview.postMessage({
+            type: 'append',
+            role: 'assistant',
+            content: `📝 Транскрипция файла "${msg.filename}":\n\n${transcription}`
+          });
+        } catch (error: any) {
+          console.error('Error transcribing audio by filename:', error);
           webviewView.webview.postMessage({ type: 'error', message: `Error transcribing audio: ${error.message}` });
         }
       }
@@ -349,20 +482,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           </div>
           <iframe id="terminal-frame" sandbox="allow-scripts" style="width: 100%; height: 200px; border: none;"></iframe>
         </div>
-        <div id="drag-drop-overlay" style="display: none;">
-          <div id="drag-drop-content">
-            <div id="drag-drop-icon">🎵</div>
-            <div id="drag-drop-text">Перетащите аудиофайл сюда для загрузки</div>
-            <div id="drag-drop-subtext">(MP3, MP4, M4A)</div>
-            <div id="drag-drop-icon">🎤</div>
-            <div id="drag-drop-text">Перетащите аудиофайл сюда для транскрипции</div>
-            <div id="drag-drop-subtext">(MP3, MP4, M4A)</div>
-          </div>
-        </div>
         <form id="form">
           <div id="input-container">
             <textarea id="prompt" placeholder="Ask a question..." rows="1"></textarea>
-            <button type="button" id="paste-image" title="Paste Image">
+            <button type="button" id="upload-image" title="Upload Image">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                 <circle cx="8.5" cy="8.5" r="1.5"></circle>
@@ -376,16 +499,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 <circle cx="18" cy="16" r="3"></circle>
               </svg>
             </button>
-            <button type="button" id="transcribe-audio" title="Transcribe Audio (MP3, MP4, M4A)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                <line x1="12" y1="19" x2="12" y2="23"></line>
-                <line x1="8" y1="23" x2="16" y2="23"></line>
-              </svg>
-            </button>
+            <input type="file" id="image-file-input" accept="image/*" style="display: none;">
             <input type="file" id="audio-file-input" accept=".mp3,.mp4,.m4a" style="display: none;">
-            <input type="file" id="transcribe-file-input" accept=".mp3,.mp4,.m4a" style="display: none;">
           </div>
           <button type="submit">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

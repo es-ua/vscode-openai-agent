@@ -13,16 +13,18 @@
   const renameThreadBtn = document.getElementById('rename-thread');
   const deleteThreadBtn = document.getElementById('delete-thread');
   const submitButton = form ? form.querySelector('button[type="submit"]') : null;
+  const uploadImageButton = document.getElementById('upload-image');
+  const imageFileInput = document.getElementById('image-file-input');
   const uploadAudioButton = document.getElementById('upload-audio');
   const audioFileInput = document.getElementById('audio-file-input');
-  const transcribeAudioButton = document.getElementById('transcribe-audio');
-  const transcribeFileInput = document.getElementById('transcribe-file-input');
-  const dragDropOverlay = document.getElementById('drag-drop-overlay');
   const app = document.getElementById('app');
   const transcriptionProgress = document.getElementById('transcription-progress');
   const transcriptionProgressFill = document.getElementById('transcription-progress-fill');
   const transcriptionProgressPercent = document.getElementById('transcription-progress-percent');
   const transcriptionProgressFilename = document.getElementById('transcription-progress-filename');
+  
+  // Хранилище прикреплённых файлов
+  let attachedFiles = [];
   
   console.log('Submit button found:', submitButton ? 'Yes' : 'No');
   
@@ -162,7 +164,7 @@
     isProcessing = processing;
     
     if (processing) {
-      // Изменяем кнопку на "Stop"
+      // Любая обработка = кнопка "Stop"
       console.log('Changing button to Stop');
       submitButton.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -205,16 +207,16 @@
     if (content.includes('[Audio:') || content.includes('[Audio Transcription:')) {
       textDiv.innerHTML = formatAudioContent(content);
     } else {
-      // Безопасно экранируем HTML и сохраняем переносы строк
-      const safeContent = content
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-      
-      // Заменяем переносы строк на <br>
-      textDiv.innerHTML = safeContent.split('\n').join('<br>');
+    // Безопасно экранируем HTML и сохраняем переносы строк
+    const safeContent = content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+    
+    // Заменяем переносы строк на <br>
+    textDiv.innerHTML = safeContent.split('\n').join('<br>');
     }
     
     el.appendChild(roleDiv);
@@ -362,9 +364,17 @@
     console.log('Received message from extension:', msg.type);
     
     if (msg.type === 'append') {
-      console.log('Append message received:', msg.role);
+      console.log('Append message received:', msg.role, 'keepProcessing:', msg.keepProcessing);
       removeThinking();
-      setProcessingState(false);
+      
+      // Сбрасываем кнопку только если не идёт транскрипция
+      if (!msg.keepProcessing) {
+        console.log('Setting processing state to false');
+        setProcessingState(false);
+      } else {
+        console.log('Keeping processing state (transcription in progress)');
+      }
+      
       append(msg.role, msg.content);
     } else if (msg.type === 'thinking') {
       console.log('Thinking message received:', msg.content);
@@ -376,7 +386,12 @@
     } else if (msg.type === 'error') {
       console.log('Error message received:', msg.message);
       removeThinking();
-      setProcessingState(false);
+      
+      // Сбрасываем кнопку только если не идёт транскрипция
+      if (!msg.keepProcessing) {
+        setProcessingState(false);
+      }
+      
       append('assistant', 'Error: ' + msg.message);
     } else if (msg.type === 'cancelRequest') {
       console.log('Request cancelled');
@@ -387,10 +402,13 @@
       console.log('Transcription progress:', msg.progress + '%');
       if (msg.progress === 0) {
         showTranscriptionProgress(msg.filename);
+        setProcessingState(true); // Блокируем кнопку = "Stop"
       } else if (msg.progress === 100) {
         hideTranscriptionProgress();
+        setProcessingState(false); // Разблокируем кнопку = "Send"
       } else {
         updateTranscriptionProgress(msg.progress);
+        // Кнопка остается "Stop" во время обработки
       }
     } else if (msg.type === 'threads') {
       renderTabs(msg.info);
@@ -434,33 +452,53 @@
   });
   
   if (form) {
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      
+    form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
       // Убираем блокировку множественных запросов - позволяем фоновое выполнение
       
       const value = prompt ? prompt.value : '';
-      if (!value.trim()) return;
       
-      append('user', value);
-      if (prompt) {
-        prompt.value = '';
+      // Устанавливаем состояние обработки сразу если есть файлы или текст
+      if (attachedFiles.length > 0 || value.trim()) {
+        setProcessingState(true);
       }
       
-      // Устанавливаем состояние обработки
-      setProcessingState(true);
+      // Если есть прикреплённые файлы, отправляем их сначала
+      if (attachedFiles.length > 0) {
+        // Отправляем все прикреплённые файлы
+        for (let i = 0; i < attachedFiles.length; i++) {
+          const isLastFile = (i === attachedFiles.length - 1) && !value.trim();
+          await sendFile(attachedFiles[i], isLastFile);
+        }
+        
+        // Очищаем прикреплённые файлы
+        attachedFiles = [];
+        showAttachedFiles();
+      }
       
-      vscode.postMessage({ 
-        type: 'sendPrompt', 
-        prompt: value
-      });
+      // Отправляем текстовое сообщение если есть
+      if (value.trim()) {
+    append('user', value);
+        if (prompt) {
+    prompt.value = '';
+        }
+    
+    vscode.postMessage({ 
+      type: 'sendPrompt', 
+      prompt: value
     });
+      } else if (attachedFiles.length === 0) {
+        // Если файлов больше нет и текста нет - сбрасываем состояние
+        setProcessingState(false);
+      }
+  });
   }
   
   if (btnNew) {
-    btnNew.addEventListener('click', () => {
-      vscode.postMessage({ type: 'newThread' });
-    });
+  btnNew.addEventListener('click', () => {
+    vscode.postMessage({ type: 'newThread' });
+  });
   }
   
   if (threadSelect) {
@@ -502,13 +540,28 @@
   
   // Обработка Enter для textarea
   if (prompt) {
-    prompt.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
+  prompt.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
         if (form) {
-          form.dispatchEvent(new Event('submit'));
-        }
+      form.dispatchEvent(new Event('submit'));
+    }
       }
+    });
+  }
+
+  // Обработка загрузки изображений
+  if (uploadImageButton && imageFileInput) {
+    uploadImageButton.addEventListener('click', () => {
+      imageFileInput.click();
+    });
+
+    imageFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        attachFile(file);
+      }
+      e.target.value = '';
     });
   }
 
@@ -521,208 +574,451 @@
     audioFileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        // Проверяем тип файла
-        const allowedTypes = ['audio/mp3', 'audio/mpeg', 'audio/mp4', 'video/mp4', 'audio/m4a', 'audio/x-m4a'];
-        if (!allowedTypes.includes(file.type)) {
-          append('assistant', '❌ Ошибка: Пожалуйста, выберите MP3, MP4 или M4A файл');
-          return;
-        }
-
-        // Проверяем размер файла (максимум 25MB для OpenAI)
-        const maxSize = 25 * 1024 * 1024; // 25MB
-        if (file.size > maxSize) {
-          append('assistant', '❌ Ошибка: Размер файла не должен превышать 25MB');
-          return;
-        }
-
-        // Показываем уведомление о загрузке
-        append('assistant', '📤 Загружаю аудиофайл...');
-        
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const audioData = event.target.result.split(',')[1]; // Убираем data:audio/mp3;base64,
-          vscode.postMessage({
-            type: 'uploadAudio',
-            audioData: audioData,
-            filename: file.name,
-            description: `Uploaded ${file.name}`
-          });
-        };
-        reader.readAsDataURL(file);
-        
-        // Очищаем input для возможности повторной загрузки того же файла
-        e.target.value = '';
+        attachFile(file);
       }
+      e.target.value = '';
     });
   }
 
-  // Обработка транскрипции аудиофайлов
-  if (transcribeAudioButton && transcribeFileInput) {
-    transcribeAudioButton.addEventListener('click', () => {
-      transcribeFileInput.click();
-    });
-
-    transcribeFileInput.addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        // Проверяем тип файла
-        const allowedTypes = ['audio/mp3', 'audio/mpeg', 'audio/mp4', 'video/mp4', 'audio/m4a', 'audio/x-m4a'];
-        if (!allowedTypes.includes(file.type)) {
-          append('assistant', '❌ Ошибка: Пожалуйста, выберите MP3, MP4 или M4A файл');
-          return;
-        }
-
-        // Проверяем размер файла (максимум 25MB для OpenAI)
-        const maxSize = 25 * 1024 * 1024; // 25MB
-        if (file.size > maxSize) {
-          append('assistant', '❌ Ошибка: Размер файла не должен превышать 25MB');
-          return;
-        }
-
-        // Используем язык по умолчанию или автоопределение
-        const defaultLanguage = vscode.getState()?.transcriptionLanguage || '';
-        const language = defaultLanguage || undefined;
-        
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const audioData = event.target.result.split(',')[1]; // Убираем data:audio/mp3;base64,
-          vscode.postMessage({
-            type: 'transcribeAudio',
-            audioData: audioData,
-            filename: file.name,
-            language: language || defaultLanguage || undefined
-          });
-        };
-        reader.readAsDataURL(file);
-        
-        // Очищаем input для возможности повторной загрузки того же файла
-        e.target.value = '';
-      }
-    });
-  }
-
-  // Drag & Drop функциональность
-  if (app && dragDropOverlay) {
-    // Показываем overlay при перетаскивании
-    app.addEventListener('dragenter', (e) => {
+  // Drag & Drop функциональность - только в области ввода сообщения
+  if (form) {
+    let dragCounter = 0; // Счётчик для правильной обработки dragleave
+    let originalFormContent = null; // Сохраняем оригинальное содержимое
+    let dropZoneActive = false; // Флаг активности визуальной зоны
+    
+    form.addEventListener('dragenter', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      dragDropOverlay.style.display = 'flex';
+      dragCounter++;
+      
+      // Превращаем зону ввода в контейнер для файлов
+      transformToDropZone();
     });
 
-    app.addEventListener('dragover', (e) => {
+    form.addEventListener('dragover', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      
+      // Меняем курсор на "копировать"
+      e.dataTransfer.dropEffect = 'copy';
     });
 
-    app.addEventListener('dragleave', (e) => {
+    form.addEventListener('dragleave', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      // Скрываем overlay только если мы покидаем весь app контейнер
-      if (!app.contains(e.relatedTarget)) {
-        dragDropOverlay.style.display = 'none';
+      dragCounter--;
+      
+      // Если курсор покинул форму — скрываем контейнер
+      const rect = form.getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (!inside || dragCounter <= 0) {
+        restoreToInputZone();
+        dropZoneActive = false;
+        dragCounter = 0;
       }
     });
 
-    app.addEventListener('drop', (e) => {
+    form.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      dragDropOverlay.style.display = 'none';
-
+      dragCounter = 0;
+      
       const files = e.dataTransfer.files;
       if (files.length > 0) {
         const file = files[0];
-        handleAudioFile(file);
+        
+        // Показываем анимацию принятия файла
+        showFileAccepted(file);
+        
+        // Прикрепляем файл к сообщению
+        attachFile(file);
       }
+      
+      // Возвращаем обычный вид с прикреплёнными файлами
+      restoreToInputZone();
+      dropZoneActive = false;
     });
+    
+    // Глобальные обработчики: активируют визуальную зону сразу при наведении
+    const isFileDrag = (e) => {
+      const types = e.dataTransfer && (e.dataTransfer.types || []);
+      if (!types) return false;
+      try {
+        // Some browsers expose DOMStringList with contains()
+        if (typeof types.contains === 'function') {
+          return types.contains('Files');
+        }
+      } catch (_) {}
+      return Array.from(types).includes('Files');
+    };
 
-    // Обработка клика на overlay для выбора режима
-    dragDropOverlay.addEventListener('click', (e) => {
+    const maybeActivateDropZone = (e) => {
+      // Разрешаем drop и предотвращаем открытие файла VS Code
       e.preventDefault();
       e.stopPropagation();
-      dragDropOverlay.style.display = 'none';
-    });
+      if (!isFileDrag(e)) return;
+      const rect = form.getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (inside && !dropZoneActive) {
+        transformToDropZone();
+        dropZoneActive = true;
+      } else if (!inside && dropZoneActive) {
+        restoreToInputZone();
+        dropZoneActive = false;
+      }
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
 
-    // Обработка клика на иконки в overlay
-    const dragDropIcons = dragDropOverlay.querySelectorAll('#drag-drop-icon');
-    dragDropIcons.forEach((icon, index) => {
-      icon.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dragDropOverlay.style.display = 'none';
-        
-        // Если есть файлы в буфере обмена
-        if (window.droppedFiles && window.droppedFiles.length > 0) {
-          const file = window.droppedFiles[0];
-          if (index === 0) {
-            // Загрузка аудио
-            handleAudioUpload(file);
-          } else {
-            // Транскрипция аудио
-            handleAudioTranscription(file);
+    // Навешиваем слушатели на document и body (в некоторых средах window не получает события drag из ОС)
+    document.addEventListener('dragenter', maybeActivateDropZone, { passive: false, capture: true });
+    document.addEventListener('dragover', maybeActivateDropZone, { passive: false, capture: true });
+    document.documentElement && document.documentElement.addEventListener('dragenter', maybeActivateDropZone, { passive: false, capture: true });
+    document.documentElement && document.documentElement.addEventListener('dragover', maybeActivateDropZone, { passive: false, capture: true });
+    if (app) {
+      app.addEventListener('dragenter', maybeActivateDropZone, { passive: false, capture: true });
+      app.addEventListener('dragover', maybeActivateDropZone, { passive: false, capture: true });
+    }
+    // Глобально предотвращаем дефолт, чтобы VS Code не перехватывал drop
+    document.addEventListener('drop', (e) => { e.preventDefault(); }, { passive: false, capture: true });
+
+    // Если уходим курсором (dragleave на документе), скрываем контейнер
+    document.addEventListener('dragleave', (e) => {
+      // Когда курсор покидает окно, координаты могут стать (0,0) и relatedTarget = null
+      const rect = form.getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (!inside && dropZoneActive) {
+        restoreToInputZone();
+        dropZoneActive = false;
+        dragCounter = 0;
+      }
+    }, { capture: true });
+
+    // Восстанавливаем состояние при дропе где угодно вне формы или окончании перетаскивания
+    window.addEventListener('drop', () => {
+      if (dropZoneActive) {
+        restoreToInputZone();
+        dropZoneActive = false;
+      }
+    });
+    window.addEventListener('dragend', () => {
+      if (dropZoneActive) {
+        restoreToInputZone();
+        dropZoneActive = false;
+      }
+    });
+    
+    // Функция превращения в зону для файлов
+    function transformToDropZone() {
+      // Сохраняем оригинальное содержимое
+      if (!originalFormContent) {
+        originalFormContent = form.innerHTML;
+      }
+      
+      // Создаём контейнер для файлов
+      form.innerHTML = `
+        <div style="
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 40px 20px;
+          text-align: center;
+          background: linear-gradient(135deg, rgba(33, 150, 243, 0.1), rgba(33, 150, 243, 0.05));
+          border: 3px dashed rgba(33, 150, 243, 0.8);
+          border-radius: 12px;
+          transition: all 0.3s ease;
+          min-height: 120px;
+        ">
+          <div style="
+            font-size: 48px;
+            margin-bottom: 16px;
+            animation: dropZonePulse 1.5s ease-in-out infinite;
+          ">📎</div>
+          <div style="
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--vscode-textLink-foreground);
+            margin-bottom: 8px;
+          ">Отпустите файл здесь</div>
+          <div style="
+            font-size: 14px;
+            color: var(--vscode-descriptionForeground);
+            opacity: 0.8;
+          ">Поддерживаются: изображения, аудио, PDF, текст и другие файлы</div>
+        </div>
+      `;
+      
+      // Добавляем CSS анимацию
+      if (!document.getElementById('dropZoneStyles')) {
+        const style = document.createElement('style');
+        style.id = 'dropZoneStyles';
+        style.textContent = `
+          @keyframes dropZonePulse {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
           }
+        `;
+        document.head.appendChild(style);
+      }
+    }
+    
+    // Функция возврата к обычной зоне ввода
+    function restoreToInputZone() {
+      if (originalFormContent) {
+        form.innerHTML = originalFormContent;
+        // Восстанавливаем обработчики событий
+        setupFormEventListeners();
+      }
+    }
+    
+    // Функция настройки обработчиков событий формы
+    function setupFormEventListeners() {
+      // Восстанавливаем обработчики для кнопок и инпутов
+      const uploadImageButton = document.getElementById('upload-image');
+      const imageFileInput = document.getElementById('image-file-input');
+      const uploadAudioButton = document.getElementById('upload-audio');
+      const audioFileInput = document.getElementById('audio-file-input');
+      
+      if (uploadImageButton && imageFileInput) {
+        uploadImageButton.addEventListener('click', () => {
+          imageFileInput.click();
+        });
+        imageFileInput.addEventListener('change', (e) => {
+          const file = e.target.files[0];
+          if (file) {
+            attachFile(file);
+          }
+          e.target.value = '';
+        });
+      }
+      
+      if (uploadAudioButton && audioFileInput) {
+        uploadAudioButton.addEventListener('click', () => {
+          audioFileInput.click();
+        });
+        audioFileInput.addEventListener('change', (e) => {
+          const file = e.target.files[0];
+          if (file) {
+            attachFile(file);
+          }
+          e.target.value = '';
+        });
+      }
+    }
+  }
+  
+  
+  // Функция для показа анимации принятия файла
+  function showFileAccepted(file) {
+    const accepted = document.createElement('div');
+    accepted.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(76, 175, 80, 0.9);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 1000;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      animation: fileAccepted 1s ease-out forwards;
+    `;
+    
+    const icon = file.type.startsWith('image/') ? '🖼️' : 
+                 file.type.startsWith('audio/') ? '🎵' : 
+                 file.type === 'application/pdf' ? '📄' : '📎';
+    
+    accepted.textContent = `${icon} Файл принят: ${file.name}`;
+    form.style.position = 'relative';
+    form.appendChild(accepted);
+    
+    // Удаляем через 2 секунды
+    setTimeout(() => {
+      if (accepted.parentNode) {
+        accepted.parentNode.removeChild(accepted);
+      }
+    }, 2000);
+  }
+  
+  // Функция для прикрепления файла к текущему сообщению
+  function attachFile(file) {
+    // Проверяем размер файла (максимум 25MB)
+    const maxSize = 25 * 1024 * 1024;
+        if (file.size > maxSize) {
+      append('assistant', '❌ Ошибка: Размер файла не должен превышать 25MB');
+          return;
         }
+
+    // Добавляем файл в массив
+    attachedFiles.push(file);
+    
+    // Показываем прикреплённый файл в UI
+    showAttachedFiles();
+  }
+  
+  // Функция для отображения прикреплённых файлов
+  function showAttachedFiles() {
+    // Ищем или создаём контейнер для прикреплённых файлов
+    let attachmentsContainer = document.getElementById('attachments-container');
+    if (!attachmentsContainer) {
+      attachmentsContainer = document.createElement('div');
+      attachmentsContainer.id = 'attachments-container';
+      attachmentsContainer.style.padding = '8px 12px';
+      attachmentsContainer.style.borderTop = '1px solid var(--vscode-panel-border)';
+      attachmentsContainer.style.display = 'flex';
+      attachmentsContainer.style.gap = '8px';
+      attachmentsContainer.style.flexWrap = 'wrap';
+      
+      // Вставляем контейнер перед формой
+      form.parentNode.insertBefore(attachmentsContainer, form);
+    }
+    
+    // Очищаем контейнер
+    attachmentsContainer.innerHTML = '';
+    
+    // Показываем все прикреплённые файлы
+    attachedFiles.forEach((file, index) => {
+      const fileChip = document.createElement('div');
+      fileChip.style.display = 'flex';
+      fileChip.style.alignItems = 'center';
+      fileChip.style.gap = '6px';
+      fileChip.style.padding = '4px 8px';
+      fileChip.style.backgroundColor = 'var(--vscode-badge-background)';
+      fileChip.style.color = 'var(--vscode-badge-foreground)';
+      fileChip.style.borderRadius = '3px';
+      fileChip.style.fontSize = '12px';
+
+      // Иконка
+      const iconSpan = document.createElement('span');
+      if (file.type.startsWith('image/')) iconSpan.textContent = '🖼️';
+      else if (file.type.startsWith('audio/')) iconSpan.textContent = '🎵';
+      else if (file.type === 'application/pdf') iconSpan.textContent = '📄';
+      else if (file.type.startsWith('text/')) iconSpan.textContent = '📝';
+      else iconSpan.textContent = '📎';
+
+      // Имя файла
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = file.name;
+
+      // Кнопка удаления (без inline-обработчика, чтобы не нарушать CSP)
+      const removeBtn = document.createElement('button');
+      removeBtn.textContent = '×';
+      removeBtn.style.background = 'none';
+      removeBtn.style.border = 'none';
+      removeBtn.style.color = 'inherit';
+      removeBtn.style.cursor = 'pointer';
+      removeBtn.style.padding = '0 4px';
+      removeBtn.addEventListener('click', () => {
+        attachedFiles.splice(index, 1);
+        showAttachedFiles();
       });
+
+      fileChip.appendChild(iconSpan);
+      fileChip.appendChild(nameSpan);
+      fileChip.appendChild(removeBtn);
+
+      attachmentsContainer.appendChild(fileChip);
+    });
+    
+    // Скрываем контейнер если нет файлов
+    if (attachedFiles.length === 0) {
+      attachmentsContainer.style.display = 'none';
+    } else {
+      attachmentsContainer.style.display = 'flex';
+    }
+  }
+  
+  // Удаление прикреплённого файла (используется из обработчиков, а не inline)
+  function removeAttachment(index) {
+    attachedFiles.splice(index, 1);
+    showAttachedFiles();
+  }
+  
+  // Переменная для отслеживания ожидаемых загрузок файлов
+  let pendingFileUploads = 0;
+  
+  // Функция для отправки файла в backend
+  function sendFile(file, isLastFile = false) {
+    return new Promise((resolve, reject) => {
+      // Увеличиваем счётчик ожидаемых загрузок
+      pendingFileUploads++;
+      
+      // Определяем тип файла и показываем в чате
+      let fileType = 'File';
+      let messageType = 'uploadFile';
+      
+      if (file.type.startsWith('image/')) {
+        fileType = 'Image';
+        messageType = 'pasteImage';
+      } else if (file.type.startsWith('audio/') || file.type === 'video/mp4') {
+        fileType = 'Audio';
+        messageType = 'uploadAudio';
+      } else if (file.type === 'application/pdf') {
+        fileType = 'PDF';
+        messageType = 'uploadFile';
+      } else if (file.type.startsWith('text/')) {
+        fileType = 'Text';
+        messageType = 'uploadFile';
+      }
+      
+      // Показываем файл в чате
+      append('user', `[${fileType}: ${file.name}]`);
+      
+      // Читаем и отправляем файл
+        const reader = new FileReader();
+        reader.onload = (event) => {
+        const fileData = event.target.result.split(',')[1];
+        
+        // Создаём обработчик для ответа от backend
+        const uploadHandler = (msg) => {
+          if ((msg.data.type === 'imageUploaded' && messageType === 'pasteImage' && msg.data.description === file.name) ||
+              (msg.data.type === 'audioUploaded' && messageType === 'uploadAudio' && msg.data.filename === file.name) ||
+              (msg.data.type === 'fileUploaded' && messageType === 'uploadFile' && msg.data.filename === file.name)) {
+            window.removeEventListener('message', uploadHandler);
+            pendingFileUploads--;
+            
+            // Если это последний файл и нет других ожидающих загрузок - сбрасываем состояние
+            if (isLastFile && pendingFileUploads === 0) {
+              // Не сбрасываем состояние здесь - оно сбросится после ответа AI
+            }
+            resolve();
+          }
+        };
+        window.addEventListener('message', uploadHandler);
+        
+        // Отправляем в зависимости от типа
+        if (messageType === 'pasteImage') {
+          vscode.postMessage({
+            type: 'pasteImage',
+            imageData: fileData,
+            description: file.name
+          });
+        } else if (messageType === 'uploadAudio') {
+          vscode.postMessage({
+            type: 'uploadAudio',
+            audioData: fileData,
+            filename: file.name,
+            description: file.name
+          });
+        } else {
+          vscode.postMessage({
+            type: 'uploadFile',
+            fileData: fileData,
+            filename: file.name,
+            fileType: file.type,
+            description: file.name
+          });
+        }
+        };
+      reader.onerror = reject;
+        reader.readAsDataURL(file);
     });
   }
 
-  // Функция для обработки переташенного аудиофайла
-  function handleAudioFile(file) {
-    // Сохраняем файл для использования в overlay
-    window.droppedFiles = [file];
-    
-    // Проверяем тип файла
-    const allowedTypes = ['audio/mp3', 'audio/mpeg', 'audio/mp4', 'video/mp4', 'audio/m4a', 'audio/x-m4a'];
-    if (!allowedTypes.includes(file.type)) {
-      append('assistant', '❌ Ошибка: Пожалуйста, перетащите MP3, MP4 или M4A файл');
-      return;
-    }
-
-    // Проверяем размер файла (максимум 25MB для OpenAI)
-    const maxSize = 25 * 1024 * 1024; // 25MB
-    if (file.size > maxSize) {
-      append('assistant', '❌ Ошибка: Размер файла не должен превышать 25MB');
-      return;
-    }
-
-    // Показываем overlay с выбором действия
-    dragDropOverlay.style.display = 'flex';
-  }
-
-  // Функция для загрузки аудио
-  function handleAudioUpload(file) {
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const audioData = event.target.result.split(',')[1]; // Убираем data:audio/mp3;base64,
-      vscode.postMessage({
-        type: 'uploadAudio',
-        audioData: audioData,
-        filename: file.name,
-        description: `Uploaded ${file.name}`
-      });
-    };
-    reader.readAsDataURL(file);
-  }
-
-  // Функция для транскрипции аудио
-  function handleAudioTranscription(file) {
-    // Используем язык по умолчанию или автоопределение
-    const defaultLanguage = vscode.getState()?.transcriptionLanguage || '';
-    const language = defaultLanguage || undefined;
-    
-    // Показываем прогресс транскрипции
-    showTranscriptionProgress(file.name);
-    
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const audioData = event.target.result.split(',')[1]; // Убираем data:audio/mp3;base64,
-      vscode.postMessage({
-        type: 'transcribeAudio',
-        audioData: audioData,
-        filename: file.name,
-        language: language || defaultLanguage || undefined
-      });
-    };
-    reader.readAsDataURL(file);
-  }
 })();

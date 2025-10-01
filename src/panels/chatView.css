@@ -134,6 +134,10 @@
   border-top: 1px solid var(--vscode-panel-border);
   background-color: var(--vscode-panel-background);
   gap: 8px;
+  transition: background-color 0.2s ease, border 0.2s ease;
+  border: 2px solid transparent;
+  border-top: 1px solid var(--vscode-panel-border);
+  border-radius: 4px 4px 0 0;
 }
 
 #input-container {
@@ -454,5 +458,42 @@ button[type="submit"].stop:hover:not(:disabled) {
   }
   50% {
     opacity: 0.5;
+  }
+}
+
+@keyframes dropHintPulse {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes fileAccepted {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+  40% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  80% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.8);
   }
 }

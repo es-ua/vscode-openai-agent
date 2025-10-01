@@ -10,6 +10,13 @@ interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   tool_calls?: any[];
+  metadata?: {
+    audioId?: string;
+    filename?: string;
+    audioPath?: string;
+    description?: string;
+    [key: string]: any;
+  };
 }
 
 interface ChatThread {
@@ -97,6 +104,11 @@ export class OpenAIChatService {
 
   private async saveThread(thread: ChatThread): Promise<void> {
     thread.updatedAt = new Date().toISOString();
+    
+    // Обновляем thread в Map чтобы изменения (включая название) были видны сразу
+    this.threads.set(thread.id, thread);
+    
+    // Сохраняем на диск
     await fs.promises.writeFile(
       path.join(this.chatHistoryDir, `${thread.id}.json`),
       JSON.stringify(thread, null, 2),
@@ -185,9 +197,47 @@ export class OpenAIChatService {
     return Array.from(this.threads.keys());
   }
 
+  private async generateThreadTitle(thread: ChatThread, firstMessage: string): Promise<void> {
+    try {
+      // Генерируем короткое название на основе первого сообщения
+      const titlePrompt = `Generate a short, concise title (3-6 words max) for a chat that starts with this message. Return ONLY the title, nothing else:\n\n"${firstMessage.substring(0, 200)}"`;
+      
+      const response = await this.makeRequest('/chat/completions', {
+        model: this.model,
+        messages: [
+          { role: 'system', content: 'You generate short, concise chat titles. Return only the title, no quotes, no punctuation at the end.' },
+          { role: 'user', content: titlePrompt }
+        ],
+        temperature: 0.7,
+        max_tokens: 50,
+      });
+
+      let title = response.choices[0].message.content?.trim() || 'New Chat';
+      
+      // Убираем кавычки если есть
+      title = title.replace(/^["']|["']$/g, '');
+      
+      // Ограничиваем длину
+      if (title.length > 50) {
+        title = title.substring(0, 47) + '...';
+      }
+      
+      thread.title = title;
+      await this.saveThread(thread);
+      console.log(`Generated thread title: ${title}`);
+    } catch (error) {
+      console.error('Error generating thread title:', error);
+      // Если не удалось сгенерировать, создаём простое название
+      const simpleTitle = firstMessage.substring(0, 40).trim();
+      thread.title = simpleTitle.length < firstMessage.length ? simpleTitle + '...' : simpleTitle;
+      await this.saveThread(thread);
+    }
+  }
+
   async chat(prompt: string, onThinking?: (step: string) => void): Promise<string> {
     try {
       const thread = await this.getCurrentThread();
+      const isFirstMessage = thread.messages.length === 0;
 
       const userMessage: Message = {
         role: 'user',
@@ -232,6 +282,11 @@ export class OpenAIChatService {
         timestamp: new Date().toISOString(),
       });
 
+      // Автоматически генерируем название для нового чатика
+      if (isFirstMessage && thread.title === 'New Chat') {
+        await this.generateThreadTitle(thread, prompt);
+      }
+
       return assistantResponseContent;
     } catch (error) {
       console.error('Chat error:', error);
@@ -255,16 +310,51 @@ export class OpenAIChatService {
   async addAudio(audioData: Buffer, filename: string, description: string): Promise<string> {
     const thread = await this.getCurrentThread();
     const audioId = await this.ragManager.addAudioMessage(audioData, thread.id);
-    // Add a message to the chat history about the audio
+    
+    // Сохраняем аудиофайл на диск для последующей транскрипции по запросу
+    const audioDir = path.join(this.storageDir, '.vscode', 'openai-agent', 'audio');
+    await fs.promises.mkdir(audioDir, { recursive: true});
+    const audioPath = path.join(audioDir, `${audioId}_${filename}`);
+    await fs.promises.writeFile(audioPath, audioData);
+    
+    // Add a message to the chat history about the audio with metadata
     const audioMessage: Message = {
       role: 'user',
       content: `[Audio: ${description}]`,
+      metadata: {
+        audioId: audioId,
+        filename: filename,
+        audioPath: audioPath,
+        description: description
+      }
     };
     thread.messages.push(audioMessage);
     await this.saveThread(thread);
     return audioId;
   }
 
+  // Новый метод: транскрибировать аудио по имени файла из текущего thread
+  async transcribeAudioByFilename(filename: string, language?: string, onProgress?: (progress: number) => void): Promise<string> {
+    const thread = await this.getCurrentThread();
+    
+    // Ищем сообщение с этим аудиофайлом
+    const audioMessage = thread.messages.find(msg => 
+      msg.metadata && 
+      msg.metadata.filename === filename
+    );
+    
+    if (!audioMessage || !audioMessage.metadata?.audioPath) {
+      throw new Error(`Audio file "${filename}" not found in current conversation`);
+    }
+    
+    // Читаем файл с диска
+    const audioPath = audioMessage.metadata.audioPath;
+    const audioData = await fs.promises.readFile(audioPath);
+    
+    // Транскрибируем
+    return this.transcribeAudio(audioData, filename, language, onProgress);
+  }
+  
   async transcribeAudio(audioData: Buffer, filename: string, language?: string, onProgress?: (progress: number) => void): Promise<string> {
     try {
       // Create a temporary file for the audio data
@@ -362,7 +452,7 @@ export class OpenAIChatService {
     return this.ragManager.indexWorkspace();
   }
 
-  private async getCurrentThread(): Promise<ChatThread> {
+  async getCurrentThread(): Promise<ChatThread> {
     if (!this.currentThread) {
       await this.newThread();
     }
@@ -400,13 +490,36 @@ export class OpenAIChatService {
       });
     }
 
-    systemPrompt += `\n🎵 AUDIO PROCESSING CAPABILITIES:
+    systemPrompt += `\n🖼️ IMAGE PROCESSING CAPABILITIES:
+- You CAN view and analyze images directly through this VS Code extension
+- Users can upload images (PNG, JPG, GIF, etc. up to 25MB) using the image upload button (🖼️) or drag & drop
+- Images will appear as [Image: filename] in the chat
+- You have full vision capabilities and can see, analyze, describe, and understand images
+- NEVER say you cannot see or process images - you have complete image analysis capabilities
+- When users upload an image, you can see its contents and answer questions about it
+
+🎵 AUDIO PROCESSING CAPABILITIES:
 - You CAN process audio files directly through this VS Code extension
-- Users can upload MP3, MP4, and M4A files (up to 25MB) using the audio upload buttons
-- You can transcribe audio files using OpenAI's Whisper API
-- When users mention audio files or ask for transcription, guide them to use the audio upload buttons (🎵 for upload, 🎤 for transcription)
-- Audio files will appear as [Audio: filename] or [Audio Transcription: filename] in the chat
-- NEVER say you cannot process audio files - you have full audio processing capabilities through this extension
+- Users can upload MP3, MP4, and M4A files (up to 25MB) using the audio upload button (🎵) or drag & drop
+- Audio files will appear as [Audio: filename.mp3] in the chat
+- Audio files are NOT automatically transcribed - transcription happens only when user explicitly requests it
+- When user asks to transcribe/analyze audio content:
+  * Respond: "Начинаю транскрипцию аудиофайла [filename]..."
+  * Internally trigger transcription (system will handle this automatically when you mention transcription)
+  * The transcription will appear in chat automatically with progress indicator
+  * After transcription completes, analyze the resulting text based on user's request
+- NEVER say you cannot process audio files - you have full audio processing capabilities through Whisper API
+- Example flow:
+  User: "расшифруй аудио voice.mp3"
+  You: "Начинаю транскрипцию аудиофайла voice.mp3..."
+  [System shows progress and transcription result]
+  You: [Analyze the transcription result]
+
+📎 FILE PROCESSING CAPABILITIES:
+- You CAN work with various file types: images, audio, PDF, text files, and more
+- Users can upload files using buttons or drag & drop (up to 25MB)
+- Files will appear as [Image: ...], [Audio: ...], [PDF: ...], [Text: ...], or [File: ...]
+- You have access to file contents and can analyze them based on their type
 
 ⚠️ CRITICAL INSTRUCTION: YOU CAN DIRECTLY EXECUTE ANY TERMINAL COMMAND using run_command. NEVER tell users you cannot run commands. ALWAYS use run_command to execute commands directly instead of giving manual instructions.`;
 
