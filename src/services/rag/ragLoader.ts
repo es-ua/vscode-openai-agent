@@ -66,21 +66,16 @@ export class RagLoader {
         }
 
         if (missingPackages.length > 0) {
-          const message = `RAG features require additional packages: ${missingPackages.join(', ')}. Install them?`;
-          const install = 'Install';
-          const disable = 'Disable RAG';
-          const response = await vscode.window.showWarningMessage(message, install, disable);
-          
-          if (response === install) {
-            await this.installPackages(missingPackages);
-          } else if (response === disable) {
-            await vscode.workspace.getConfiguration('openaiAgent').update('rag.enabled', false, true);
-            resolve(false);
-            return;
-          } else {
-            resolve(false);
-            return;
-          }
+          // Никогда не устанавливаем зависимости в проект пользователя.
+          // Автоматически отключаем RAG и уведомляем пользователя, как включить его безопасно.
+          await vscode.workspace.getConfiguration('openaiAgent').update('rag.enabled', false, true);
+          vscode.window.showWarningMessage(
+            `RAG disabled: missing packages (${missingPackages.join(', ')}). ` +
+            `This extension will never install dependencies into your workspace. ` +
+            `Please install them manually in the extension environment or use a pre-bundled build.`
+          );
+          resolve(false);
+          return;
         }
 
         // Динамически импортируем зависимости
@@ -113,24 +108,9 @@ export class RagLoader {
   /**
    * Устанавливает недостающие пакеты
    */
-  private async installPackages(packages: string[]): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const terminal = vscode.window.createTerminal('RAG Dependencies');
-      terminal.show();
-      terminal.sendText(`npm install ${packages.join(' ')}`);
-      
-      // Ждем завершения установки
-      const disposable = vscode.window.onDidCloseTerminal(closedTerminal => {
-        if (closedTerminal === terminal) {
-          disposable.dispose();
-          if (terminal.exitStatus?.code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`Failed to install packages: ${terminal.exitStatus?.code}`));
-          }
-        }
-      });
-    });
+  private async installPackages(_packages: string[]): Promise<void> {
+    // Защита: никогда не устанавливаем зависимости в пользовательский проект
+    throw new Error('Installing packages in the workspace is disabled by design.');
   }
 
   /**
