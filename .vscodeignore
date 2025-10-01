@@ -1,20 +1,20 @@
-# Source files
-src/**
-tsconfig.json
 .vscode/**
-
-# Documentation
-Doc/**
-tasks.md
-*.md
-!README.md
-
-# Development files
+.vscode-test/**
+out/test/**
+src/**
 .gitignore
-vscode-openai-agent.code-workspace
+.yarnrc
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/.eslintrc.json
+**/*.map
+**/*.ts
 node_modules/**
-
-# Old packages (keep current version)
-vscode-openai-agent-0.1.0.vsix
-vscode-openai-agent-0.1.1.vsix
-vscode-openai-agent-0.1.2.vsix
+!node_modules/axios/**
+.cursor/**
+.github/**
+.git/**
+**/*.vsix
+makeRequest.js
+webpack.config.js
+src/services/openAIService.ts

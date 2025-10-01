@@ -1,16 +1,20 @@
 import * as vscode from 'vscode';
-import { OpenAIService } from './services/openAIService';
 import { ConfigurationService } from './services/configurationService';
 import { EditorService } from './services/editorService';
 import { SuggestionService } from './services/suggestionService';
 import { ChatViewProvider } from './panels/chatViewProvider';
+import { RagLoader } from './services/rag/ragLoader';
+import { ChatApiAdapter } from './services/chatApiAdapter';
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OpenAI Agent extension is now active');
   
   // Initialize services
   const configService = new ConfigurationService(context);
-  const openAIService = new OpenAIService(configService, context.extensionUri.fsPath);
+  
+  // Создаем сервис для Chat Completions API
+  const openAIService = new ChatApiAdapter(configService, context.extensionUri.fsPath);
+  
   const editorService = new EditorService();
   const suggestionService = new SuggestionService(openAIService, editorService);
   const chatViewProvider = new ChatViewProvider(openAIService, configService, context.extensionUri);
@@ -50,17 +54,32 @@ export async function activate(context: vscode.ExtensionContext) {
     await suggestionService.resetAssistantThread();
   });
   
-  const resetAssistantCommand = vscode.commands.registerCommand('vscode-openai-agent.resetAssistant', async () => {
-    await configService.resetAssistantId();
-    vscode.window.showInformationMessage('OpenAI Assistant has been reset. It will be recreated on next use.');
+  const indexCodeCommand = vscode.commands.registerCommand('vscode-openai-agent.indexCode', async () => {
+    // Проверяем, включен ли RAG
+    const ragLoader = RagLoader.getInstance();
+    if (await ragLoader.isRagEnabled()) {
+      if (await ragLoader.loadDependencies()) {
+        vscode.window.showInformationMessage('Starting code indexing for RAG...');
+        // Динамически загружаем и инициализируем RAG-компоненты
+        try {
+          await openAIService.initialize();
+          vscode.window.showInformationMessage('Code indexing started');
+        } catch (error) {
+          vscode.window.showErrorMessage(`Failed to start code indexing: ${error}`);
+        }
+      } else {
+        vscode.window.showErrorMessage('Failed to load RAG dependencies');
+      }
+    } else {
+      vscode.window.showInformationMessage('RAG features are disabled. Enable them in settings to use code indexing.');
+    }
   });
-  
-  
 
   const askCommand = vscode.commands.registerCommand('vscode-openai-agent.ask', async () => {
     suggestionService.setMode('ask');
     await suggestionService.askAtCursor();
   });
+  
   const reloadMcpCommand = vscode.commands.registerCommand('vscode-openai-agent.reloadMcp', async () => {
     try {
       await openAIService.initialize();
@@ -102,7 +121,7 @@ export async function activate(context: vscode.ExtensionContext) {
     disableCommand,
     setApiKeyCommand,
     resetContextCommand,
-    resetAssistantCommand,
+    indexCodeCommand,
     askCommand,
     reloadMcpCommand,
     showPanelCommand,
@@ -132,6 +151,35 @@ export async function activate(context: vscode.ExtensionContext) {
       await openAIService.initialize();
     } catch (error) {
       // Error handling is done inside the initialize method
+    }
+  }
+
+  // Проверяем, нужно ли загружать RAG-компоненты
+  const ragLoader = RagLoader.getInstance();
+  if (await ragLoader.isRagEnabled()) {
+    // Динамически загружаем RAG-компоненты только если они включены
+    vscode.window.showInformationMessage('Loading RAG components...');
+    
+    if (await ragLoader.loadDependencies()) {
+      try {
+        // Динамически импортируем и регистрируем RAG-компоненты
+        const { DecisionsViewProvider } = await import('./panels/decisionsView');
+        const { ContextSearchViewProvider } = await import('./panels/contextSearchView');
+        
+        // Регистрируем дополнительные представления
+        const decisionsViewProvider = new DecisionsViewProvider(openAIService, context.extensionUri);
+        const contextSearchViewProvider = new ContextSearchViewProvider(openAIService, context.extensionUri);
+        
+        context.subscriptions.push(
+          vscode.window.registerWebviewViewProvider(DecisionsViewProvider.viewId, decisionsViewProvider),
+          vscode.window.registerWebviewViewProvider(ContextSearchViewProvider.viewId, contextSearchViewProvider)
+        );
+        
+        vscode.window.showInformationMessage('RAG components loaded successfully');
+      } catch (error) {
+        console.error('Failed to load RAG components:', error);
+        vscode.window.showErrorMessage(`Failed to load RAG components: ${error}`);
+      }
     }
   }
 }

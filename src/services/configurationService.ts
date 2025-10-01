@@ -3,17 +3,24 @@ import * as vscode from 'vscode';
 export class ConfigurationService {
   private context: vscode.ExtensionContext;
   private readonly API_KEY_SECRET = 'openai-api-key';
-  private readonly ASSISTANT_ID_KEY = 'openai-assistant-id';
   private readonly THREAD_ID_KEY = 'openai-thread-id';
   private readonly THREADS_KEY = 'openai-threads';
   private readonly ACTIVE_THREAD_KEY = 'openai-active-thread';
   private readonly THREAD_NAMES_KEY = 'openai-thread-names';
+  private readonly CONFIG_PREFIX = 'openai-config-';
+  private _onConfigChange = new vscode.EventEmitter<void>();
+  public readonly onConfigChange = this._onConfigChange.event;
   
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('openaiAgent')) {
+        this._onConfigChange.fire();
+      }
+    });
   }
   
-  public getConfiguration() {
+  public getConfiguration(): vscode.WorkspaceConfiguration {
     return vscode.workspace.getConfiguration('openaiAgent');
   }
   
@@ -49,19 +56,12 @@ export class ConfigurationService {
   public async setApiKey(apiKey: string): Promise<void> {
     await this.context.secrets.store(this.API_KEY_SECRET, apiKey);
   }
-  
-  public getAssistantId(): string | undefined {
-    return this.context.globalState.get<string>(this.ASSISTANT_ID_KEY);
-  }
-  
-  public setAssistantId(assistantId: string): Thenable<void> {
-    return this.context.globalState.update(this.ASSISTANT_ID_KEY, assistantId);
-  }
-  
-  public resetAssistantId(): Thenable<void> {
-    return this.context.globalState.update(this.ASSISTANT_ID_KEY, undefined);
-  }
 
+  public getApiKeySync(): string | undefined {
+    // This is a synchronous getter, use with caution as it might return undefined if not loaded yet
+    return undefined; // Cannot access secrets synchronously
+  }
+  
   public getThreadId(): string | undefined {
     return this.context.globalState.get<string>(this.THREAD_ID_KEY);
   }
@@ -100,7 +100,15 @@ export class ConfigurationService {
     return this.context.globalState.update(this.THREAD_NAMES_KEY, names);
   }
 
-  public getThreadName(threadId: string): string | undefined {
-    return this.getThreadNames()[threadId];
+  public getMcpServers(): any[] {
+    return this.getConfiguration().get<any[]>('mcp.servers') || [];
+  }
+
+  public async getConfigValue(key: string): Promise<any> {
+    return this.getConfiguration().get(key);
+  }
+
+  public async setConfigValue(key: string, value: any): Promise<void> {
+    await this.getConfiguration().update(key, value, true);
   }
 }

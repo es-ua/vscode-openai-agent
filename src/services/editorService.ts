@@ -1,102 +1,114 @@
 import * as vscode from 'vscode';
 
 export class EditorService {
-  public getActiveEditor(): vscode.TextEditor | undefined {
-    return vscode.window.activeTextEditor;
-  }
-  
-  public getCurrentDocument(): vscode.TextDocument | undefined {
-    const editor = this.getActiveEditor();
-    return editor?.document;
-  }
-  
-  public getLanguageId(): string | undefined {
-    return this.getCurrentDocument()?.languageId;
-  }
-  
-  public getCurrentPosition(): vscode.Position | undefined {
-    const editor = this.getActiveEditor();
-    return editor?.selection.active;
-  }
-  
-  public getContextBeforeCursor(maxLines: number = 10): string {
-    const editor = this.getActiveEditor();
-    if (!editor || !editor.document) {
-      return '';
-    }
+  /**
+   * Get the context before the cursor
+   * @param lines Number of lines to include before the cursor
+   * @returns The text before the cursor
+   */
+  public getContextBeforeCursor(lines: number = 10): string {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return '';
     
     const document = editor.document;
     const position = editor.selection.active;
     
-    // Get the current line
-    const currentLine = position.line;
+    // Get the current line and character position
+    const lineNumber = position.line;
+    const charPosition = position.character;
     
-    // Determine the starting line, ensuring we don't go below 0
-    const startLine = Math.max(0, currentLine - maxLines);
+    // Calculate the start line
+    const startLine = Math.max(0, lineNumber - lines);
     
-    // Get text from startLine to current position
-    const range = new vscode.Range(
-      new vscode.Position(startLine, 0),
-      position
-    );
+    // Get the text from the start line to the cursor position
+    let context = '';
     
-    return document.getText(range);
+    // Add the lines before the current line
+    for (let i = startLine; i < lineNumber; i++) {
+      context += document.lineAt(i).text + '\n';
+    }
+    
+    // Add the current line up to the cursor
+    context += document.lineAt(lineNumber).text.substring(0, charPosition);
+    
+    return context;
   }
   
-  public getCurrentLinePrefix(): string {
-    const editor = this.getActiveEditor();
-    if (!editor || !editor.document) {
-      return '';
-    }
+  /**
+   * Get the surrounding context around the cursor or selection
+   * @param lines Number of lines to include before and after the cursor or selection
+   * @returns The text around the cursor or selection
+   */
+  public getSurroundingContext(lines: number = 10): string {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return '';
     
     const document = editor.document;
-    const position = editor.selection.active;
+    const selection = editor.selection;
     
-    // Get text from beginning of line to current cursor position
-    const linePrefix = document.lineAt(position.line).text.substring(0, position.character);
+    // Get the start and end lines of the selection or cursor
+    const startLine = Math.max(0, selection.start.line - lines);
+    const endLine = Math.min(document.lineCount - 1, selection.end.line + lines);
     
-    return linePrefix;
-  }
-  
-  public getFileContext(): string {
-    const document = this.getCurrentDocument();
-    if (!document) {
-      return '';
+    // Get the text from the start line to the end line
+    let context = '';
+    for (let i = startLine; i <= endLine; i++) {
+      context += document.lineAt(i).text + '\n';
     }
     
-    return document.getText();
+    return context;
   }
   
-  public getContextAfterCursor(maxLines: number = 10): string {
-    const editor = this.getActiveEditor();
-    if (!editor || !editor.document) {
-      return '';
-    }
-    
-    const document = editor.document;
-    const position = editor.selection.active;
-    
-    // Get the current line
-    const currentLine = position.line;
-    
-    // Determine the ending line, ensuring we don't go beyond document length
-    const endLine = Math.min(document.lineCount - 1, currentLine + maxLines);
-    
-    // Get text from current position to endLine
-    const range = new vscode.Range(
-      position,
-      new vscode.Position(endLine, document.lineAt(endLine).text.length)
-    );
-    
-    return document.getText(range);
-  }
-  
+  /**
+   * Get the selected text or the current line if no text is selected
+   * @returns The selected text or current line
+   */
   public getSelectedText(): string {
-    const editor = this.getActiveEditor();
-    if (!editor || !editor.document) {
-      return '';
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return '';
+    
+    const selection = editor.selection;
+    
+    // If there's a selection, return the selected text
+    if (!selection.isEmpty) {
+      return editor.document.getText(selection);
     }
     
-    return editor.document.getText(editor.selection);
+    // Otherwise, return the current line
+    const lineNumber = selection.active.line;
+    return editor.document.lineAt(lineNumber).text;
+  }
+  
+  /**
+   * Get the entire file content
+   * @returns The entire file content
+   */
+  public getFileContent(): string {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return '';
+    
+    return editor.document.getText();
+  }
+  
+  /**
+   * Get the file path of the active editor
+   * @returns The file path or undefined if no editor is active
+   */
+  public getFilePath(): string | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return undefined;
+    
+    return editor.document.uri.fsPath;
+  }
+  
+  /**
+   * Get the language ID of the active editor
+   * @returns The language ID or undefined if no editor is active
+   */
+  public getLanguageId(): string | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return undefined;
+    
+    return editor.document.languageId;
   }
 }

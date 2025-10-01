@@ -103,138 +103,121 @@ export class PermissionService {
       console.log('Adding new permission');
       this.permissions.permissions.push(permission);
     }
-
-    console.log('Permissions after add:', this.permissions.permissions);
     this.savePermissions();
     
-    // Notify webview about permission update
+    // Update webview with new stats
+    this.updatePermissionStats();
+  }
+
+  private updatePermissionStats() {
     if (this._view) {
       const stats = this.getPermissionStats();
+      console.log('Sending updated permission stats:', stats);
       this._view.webview.postMessage({ type: 'permissionStats', stats });
     }
   }
 
-  async requestPermission(command: string, description?: string): Promise<boolean> {
-    console.log('requestPermission called for:', command, 'description:', description);
-    // Check if we have a saved permission for this command
-    const savedPermission = this.findPermission(command);
-    if (savedPermission) {
-      console.log('Found saved permission:', savedPermission);
-      return savedPermission.allowed;
+  public async requestPermission(command: string, description?: string): Promise<boolean> {
+    console.log('requestPermission called for command:', command);
+    
+    // Check if we already have a remembered permission
+    const existingPermission = this.findPermission(command);
+    if (existingPermission) {
+      console.log('Found existing permission:', existingPermission);
+      return existingPermission.allowed;
     }
-    console.log('No saved permission found, requesting new permission');
 
-    // If auto-approve is enabled, allow all commands
+    // If auto-approve is enabled, automatically allow
     if (this.permissions.autoApprove) {
-      this.addPermission(command, true, description);
+      console.log('Auto-approve enabled, automatically allowing command');
+      this.addPermission(command, true, description, true);
       return true;
     }
 
-    // Request permission from user
-    return new Promise((resolve) => {
-      if (this._view) {
-        this._view.webview.postMessage({
-          type: 'requestPermission',
-          command,
-          description: description || `Execute command: ${command}`
-        });
-
-        // Listen for permission response with timeout
-        let resolved = false;
-        const messageHandler = (message: any) => {
-          console.log('Received message in permission handler:', message);
-          if (message.type === 'permissionResponse' && message.command === command && !resolved) {
-            console.log('Permission response received:', message);
-            resolved = true;
-            this._view?.webview.onDidReceiveMessage(messageHandler);
-            
-            // Add permission with remember flag
-            this.addPermission(command, message.allowed, description, message.remember || false);
-            console.log('Permission added with remember flag:', message.remember || false);
-            
-            resolve(message.allowed);
-          }
-        };
-
-        this._view.webview.onDidReceiveMessage(messageHandler);
-        
-        // Fallback timeout - if no response in 30 seconds, use VS Code notification
-        setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            this._view?.webview.onDidReceiveMessage(messageHandler);
-            vscode.window.showWarningMessage(
-              `Agent wants to execute: ${description || command}`,
-              'Allow', 'Deny', 'Allow & Remember'
-            ).then(selection => {
-              if (selection === 'Allow') {
-                this.addPermission(command, true, description, false);
-                resolve(true);
-              } else if (selection === 'Allow & Remember') {
-                this.addPermission(command, true, description, true);
-                resolve(true);
-              } else {
-                this.addPermission(command, false, description, false);
-                resolve(false);
-              }
-            });
-          }
-        }, 30000);
-      } else {
-        // Fallback to VS Code notification if no webview
-        vscode.window.showWarningMessage(
-          `Agent wants to execute: ${description || command}`,
-          'Allow', 'Deny', 'Allow & Remember'
-        ).then(selection => {
-          if (selection === 'Allow') {
-            resolve(true);
-          } else if (selection === 'Allow & Remember') {
-            this.addPermission(command, true, description, true);
-            resolve(true);
-          } else {
-            resolve(false);
-          }
-        });
+    // Otherwise, ask the user
+    return new Promise<boolean>((resolve) => {
+      if (!this._view) {
+        console.warn('No webview available for permission request');
+        resolve(false);
+        return;
       }
+
+      const requestId = Date.now().toString();
+      
+      // Create a disposable to handle the response
+      const listener = (message: any) => {
+        if (message.data.type === 'permissionResponse' && message.data.id === requestId) {
+          this._view?.webview.onDidReceiveMessage(listener);
+          
+          const allowed = message.data.response === 'allow';
+          const remember = message.data.remember === true;
+          
+          console.log('Received permission response:', { allowed, remember });
+          
+          // Add the permission if it should be remembered
+          if (remember) {
+            this.addPermission(command, allowed, description, true);
+          }
+          
+          resolve(allowed);
+        }
+      };
+      
+      // Add the listener
+      this._view.webview.onDidReceiveMessage(listener);
+
+      // Send the permission request to the webview
+      console.log('Sending permission request to webview:', { command, description });
+      this._view.webview.postMessage({
+        type: 'permissionRequest',
+        id: requestId,
+        command,
+        description
+      });
     });
   }
 
-  setAutoApprove(enabled: boolean) {
-    this.permissions.autoApprove = enabled;
+  public handlePermissionResponse(id: string, response: string, remember: boolean) {
+    console.log('handlePermissionResponse called with:', { id, response, remember });
+    if (this._view) {
+      this._view.webview.postMessage({
+        type: 'permissionResponse',
+        id,
+        response,
+        remember
+      });
+    }
+  }
+
+  public stopCommand() {
+    console.log('stopCommand called');
+    if (this._view) {
+      this._view.webview.postMessage({
+        type: 'terminal_command_end',
+        success: false,
+        message: 'Command stopped by user'
+      });
+    }
+  }
+
+  public getPermissionStats() {
+    const allowed = this.permissions.permissions.filter(p => p.allowed && p.remembered).length;
+    const denied = this.permissions.permissions.filter(p => !p.allowed && p.remembered).length;
+    return { allowed, denied };
+  }
+
+  public setAutoApprove(value: boolean) {
+    this.permissions.autoApprove = value;
     this.savePermissions();
   }
 
-  getAutoApprove(): boolean {
+  public getAutoApprove(): boolean {
     return this.permissions.autoApprove;
   }
 
-  getAllPermissions(): Permission[] {
-    return this.permissions.permissions;
-  }
-
-  clearPermissions() {
+  public clearPermissions() {
     this.permissions.permissions = [];
     this.savePermissions();
-  }
-
-  removePermission(command: string) {
-    this.permissions.permissions = this.permissions.permissions.filter(p => p.command !== command);
-    this.savePermissions();
-  }
-
-  getPermissionStats() {
-    const total = this.permissions.permissions.length;
-    const allowed = this.permissions.permissions.filter(p => p.allowed).length;
-    const denied = total - allowed;
-    
-    console.log('getPermissionStats called. Total:', total, 'Allowed:', allowed, 'Denied:', denied, 'Auto-approve:', this.permissions.autoApprove);
-    console.log('All permissions:', this.permissions.permissions);
-    
-    return {
-      total,
-      allowed,
-      denied,
-      autoApprove: this.permissions.autoApprove
-    };
+    this.updatePermissionStats();
   }
 }

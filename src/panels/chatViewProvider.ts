@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { OpenAIService } from '../services/openAIService';
+import { OpenAIServiceInterface } from '../services/openAIServiceInterface';
 import { ConfigurationService } from '../services/configurationService';
 import { PermissionService } from '../services/permissionService';
 
@@ -7,13 +7,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'openaiAgent.chatView';
   public static readonly panelViewId = 'openaiAgent.panelView';
   private _view?: vscode.WebviewView;
-  private openAI: OpenAIService;
+  private openAI: OpenAIServiceInterface;
   private configService: ConfigurationService;
   private permissionService?: PermissionService;
   private extensionUri: vscode.Uri;
   private isProcessing: boolean = false;
 
-  constructor(openAI: OpenAIService, configService: ConfigurationService, extensionUri: vscode.Uri) {
+  constructor(openAI: OpenAIServiceInterface, configService: ConfigurationService, extensionUri: vscode.Uri) {
     this.openAI = openAI;
     this.configService = configService;
     this.extensionUri = extensionUri;
@@ -102,9 +102,62 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    webviewView.webview.onDidReceiveMessage(async msg => {
-      if (!msg || !msg.type) return;
-      if (msg.type === 'cancelRequest') {
+    webviewView.webview.onDidReceiveMessage(async (msg) => {
+      console.log('Received message from webview:', msg.type);
+      
+      if (msg.type === 'sendPrompt') {
+        if (this.isProcessing) {
+          webviewView.webview.postMessage({ type: 'error', message: 'Already processing a request, please wait...' });
+          return;
+        }
+        
+        this.isProcessing = true;
+        webviewView.webview.postMessage({ type: 'thinking', content: 'Thinking...' });
+        
+        try {
+          const response = await this.openAI.chat(msg.prompt, (step) => {
+            webviewView.webview.postMessage({ type: 'updateThinking', content: step });
+          });
+          console.log('Chat response received');
+        } catch (error: any) {
+          console.error('Error in chat:', error);
+          webviewView.webview.postMessage({ type: 'error', message: error.message });
+        } finally {
+          this.isProcessing = false;
+        }
+      } else if (msg.type === 'newThread') {
+        try {
+          const threadId = await this.openAI.newThread();
+          postThreads();
+        } catch (error: any) {
+          console.error('Error creating new thread:', error);
+          webviewView.webview.postMessage({ type: 'error', message: error.message });
+        }
+      } else if (msg.type === 'setActiveThread') {
+        try {
+          await this.openAI.setActiveThread(msg.threadId);
+          const history = await this.openAI.getThreadHistory(msg.threadId);
+          webviewView.webview.postMessage({ type: 'loadHistory', history });
+          postThreads();
+        } catch (error: any) {
+          console.error('Error setting active thread:', error);
+          webviewView.webview.postMessage({ type: 'error', message: error.message });
+        }
+      } else if (msg.type === 'renameThread') {
+        try {
+          await this.openAI.setThreadName(msg.threadId, msg.name);
+          postThreads();
+        } catch (error: any) {
+          console.error('Error renaming thread:', error);
+          webviewView.webview.postMessage({ type: 'error', message: error.message });
+        }
+      } else if (msg.type === 'handlePermissionResponse') {
+        if (this.permissionService) {
+          this.permissionService.handlePermissionResponse(msg.id, msg.response, msg.remember);
+          const stats = this.permissionService.getPermissionStats();
+          webviewView.webview.postMessage({ type: 'permissionStats', stats });
+        }
+      } else if (msg.type === 'cancelRequest') {
         console.log('Received cancelRequest from webview');
         if (this.isProcessing) {
           try {
@@ -119,974 +172,120 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             webviewView.webview.postMessage({ type: 'error', message: 'Failed to cancel request' });
           }
         }
-      } else if (msg.type === 'sendPrompt') {
-        const prompt: string = msg.prompt || '';
-        const files: any[] = msg.files || [];
-        if (!prompt.trim() && files.length === 0) return;
-        
-        // Cancel any current run before starting a new one
-        if (this.isProcessing) {
-          try {
-            await this.openAI.cancelCurrentRun();
-          } catch (error) {
-            console.warn('Failed to cancel previous run:', error);
-          }
-        }
-        
-        this.isProcessing = true;
-        try {
-          // Show initial thinking
-          const thinkingContent = files.length > 0 
-            ? `Analyzing your question and ${files.length} file(s)...`
-            : 'Analyzing your question...';
-          webviewView.webview.postMessage({ type: 'thinking', content: thinkingContent });
-          
-          // Create enhanced prompt with file information and content
-          let enhancedPrompt = prompt;
-          if (files.length > 0) {
-            console.log('Processing files:', files);
-            let fileSections: string[] = [];
-            
-            files.forEach(file => {
-              if (file.content) {
-                if (file.content.type === 'image') {
-                  fileSections.push(`\n--- IMAGE FILE: ${file.name} ---\n${file.content.description}\nBase64 data: ${file.content.data}`);
-                } else if (file.content.type === 'text') {
-                  fileSections.push(`\n--- TEXT FILE: ${file.name} ---\n${file.content.content}`);
-                } else if (file.content.type === 'binary') {
-                  fileSections.push(`\n--- FILE: ${file.name} ---\n${file.content.description}`);
-                }
-              } else {
-                // Fallback for old format
-                fileSections.push(`\n--- FILE: ${file.name} ---\nType: ${file.type}, Size: ${Math.round(file.size/1024)}KB`);
-              }
-            });
-            
-            enhancedPrompt = `Files attached:${fileSections.join('\n')}\n\nQuestion: ${prompt}`;
-          }
-          
-          const res = await this.openAI.chat(enhancedPrompt, (thinkingStep: string) => {
-            if (this.isProcessing) {
-              webviewView.webview.postMessage({ type: 'updateThinking', content: thinkingStep });
-            }
-          });
-          
-          console.log('Chat response received:', res);
-          console.log('isProcessing state:', this.isProcessing);
-          
-          // Always send the response, regardless of isProcessing state
-          webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: res || '(no content)' });
-          
-          // Auto-generate thread name from first message if thread is new
-          const info = this.openAI.getThreadInfo();
-          if (info.active && !info.threadNames[info.active]) {
-            const threadName = prompt.length > 20 ? prompt.substring(0, 20) + '...' : prompt;
-            await this.openAI.setThreadName(info.active, threadName);
-            await postThreads();
-          }
-        } catch (e: any) {
-          // Always send error, regardless of isProcessing state
-          webviewView.webview.postMessage({ type: 'error', message: e?.message || String(e) });
-        } finally {
-          this.isProcessing = false;
-        }
-      } else if (msg.type === 'newThread') {
-        // If currently processing, stop the current process first
-        if (this.isProcessing) {
-          this.isProcessing = false;
-          webviewView.webview.postMessage({ type: 'thinking', content: 'Creating new thread...' });
-        }
-        await this.openAI.newThread();
-        try { await this.openAI.initialize(); } catch {}
-        await postThreads();
-        // ask webview to clear UI for fresh chat
-        webviewView.webview.postMessage({ type: 'clear' });
-      } else if (msg.type === 'closeThread') {
-        const threadId = msg.id;
-        const activeThreadId = this.openAI.getActiveThreadId();
-        
-        // If closing the active thread and currently processing, stop the current process first
-        if (this.isProcessing && threadId === activeThreadId) {
-          this.isProcessing = false;
-          webviewView.webview.postMessage({ type: 'thinking', content: 'Stopping AI and closing thread...' });
-        }
-        
-        if (threadId) {
-          await this.openAI.closeThread(threadId);
-          try { await this.openAI.initialize(); } catch {}
-          await postThreads();
-          webviewView.webview.postMessage({ type: 'clear' });
-        }
-      } else if (msg.type === 'switchThread') {
-        // If currently processing, stop the current process first
-        if (this.isProcessing) {
-          this.isProcessing = false;
-          webviewView.webview.postMessage({ type: 'thinking', content: 'Switching threads...' });
-        }
-        await this.openAI.setActiveThread(msg.id);
-        try { await this.openAI.initialize(); } catch {}
-        await postThreads();
-        webviewView.webview.postMessage({ type: 'clear' });
-      } else if (msg.type === 'setThreadName') {
-        await this.openAI.setThreadName(msg.id, msg.name);
-        await postThreads();
-      } else if (msg.type === 'stopAI') {
-        this.isProcessing = false;
-        // Cancel the current OpenAI run
-        try {
-          await this.openAI.cancelCurrentRun();
-        } catch (error) {
-          console.warn('Failed to cancel OpenAI run:', error);
-        }
-      } else if (msg.type === 'setMode') {
-        // Call the setMode command
-        vscode.commands.executeCommand('vscode-openai-agent.setMode', msg.mode);
-        // Send mode change confirmation to the webview
-        webviewView.webview.postMessage({ type: 'modeChanged', mode: msg.mode });
-      } else if (msg.type === 'setModel') {
-        console.log('Setting model to:', msg.model);
-        // Update the model setting
-        await this.configService.setModel(msg.model);
-        console.log('Model saved to config, current model:', this.configService.getModel());
-        // Update the assistant with the new model
-        try {
-          await this.openAI.updateAssistantModel();
-          console.log('Assistant model updated successfully');
-        } catch (error) {
-          console.error('Error updating assistant model:', error);
-        }
-        webviewView.webview.postMessage({ type: 'modelChanged', model: msg.model });
-      } else if (msg.type === 'getCurrentModel') {
-        // Send current model to webview
-        const currentModel = this.configService.getModel();
-        webviewView.webview.postMessage({ type: 'modelChanged', model: currentModel });
-      } else if (msg.type === 'getSessionCost') {
-        // Send current session cost to webview
-        const sessionCost = this.openAI.getSessionCost();
-        webviewView.webview.postMessage({ type: 'sessionCost', cost: sessionCost });
-      } else if (msg.type === 'resetSessionCost') {
-        // Reset session cost
-        this.openAI.resetSessionCost();
-        webviewView.webview.postMessage({ type: 'sessionCost', cost: 0 });
-      } else if (msg.type === 'permissionResponse') {
-        // Handle permission response from UI
-        // This will be handled by the PermissionService directly
-      } else if (msg.type === 'getPermissionStats') {
-        // Send permission statistics to webview
-        const stats = this.openAI.getPermissionStats();
-        webviewView.webview.postMessage({ type: 'permissionStats', stats });
-      } else if (msg.type === 'getAllPermissions') {
-        // Send all permissions to webview
-        const permissions = this.openAI.getAllPermissions();
-        webviewView.webview.postMessage({ type: 'allPermissions', permissions });
-      } else if (msg.type === 'setAutoApprove') {
-        // Set auto-approve mode
-        this.openAI.setAutoApprove(msg.enabled);
-        webviewView.webview.postMessage({ type: 'autoApproveChanged', enabled: msg.enabled });
-      } else if (msg.type === 'clearPermissions') {
-        // Clear all permissions
-        this.openAI.clearPermissions();
-        webviewView.webview.postMessage({ type: 'permissionsCleared' });
-      } else if (msg.type === 'removePermission') {
-        // Remove specific permission
-        this.openAI.removePermission(msg.command);
-        webviewView.webview.postMessage({ type: 'permissionRemoved', command: msg.command });
       } else if (msg.type === 'stopCommand') {
-        // Остановка выполнения команды
-        console.log('Stopping command:', msg.command);
+        if (this.permissionService) {
+          this.permissionService.stopCommand();
+        }
+      } else if (msg.type === 'pasteImage') {
         try {
-          // Передаем запрос на остановку команды в OpenAI сервис
-          await this.openAI.stopCommand(msg.command);
-          // Отправляем сообщение об остановке команды в терминал
-          webviewView.webview.postMessage({ 
-            type: 'terminalOutput', 
-            command: msg.command, 
-            output: 'Command was stopped by user.', 
-            isError: true 
-          });
-        } catch (error) {
-          console.error('Error stopping command:', error);
-          webviewView.webview.postMessage({ 
-            type: 'terminalOutput', 
-            command: msg.command, 
-            output: `Failed to stop command: ${error}`, 
-            isError: true 
-          });
+          // Handle image data from clipboard
+          const imageData = Buffer.from(msg.imageData, 'base64');
+          const imageId = await this.openAI.addImage(imageData, msg.description || 'Pasted image');
+          webviewView.webview.postMessage({ type: 'append', role: 'user', content: `[Image: ${msg.description || 'Pasted image'}]` });
+        } catch (error: any) {
+          console.error('Error processing image:', error);
+          webviewView.webview.postMessage({ type: 'error', message: `Error processing image: ${error.message}` });
+        }
+      } else if (msg.type === 'uploadAudio') {
+        try {
+          // Handle audio file upload
+          const audioData = Buffer.from(msg.audioData, 'base64');
+          const audioId = await this.openAI.addAudio(audioData, msg.filename, msg.description || 'Uploaded audio file');
+          webviewView.webview.postMessage({ type: 'append', role: 'user', content: `[Audio: ${msg.filename || 'Uploaded audio file'}]` });
+        } catch (error: any) {
+          console.error('Error processing audio:', error);
+          webviewView.webview.postMessage({ type: 'error', message: `Error processing audio: ${error.message}` });
         }
       }
     });
   }
 
   private getHtml(webview: vscode.Webview): string {
-    const addIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'add_macos.svg')).toString();
-    const clearIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'clear_macos.svg')).toString();
-    const deleteIcon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'close_macos.svg')).toString();
+    // Generate a nonce to use in the HTML
+    const nonce = this.getNonce();
     
-    // Используем unsafe-inline для скриптов
-    const csp = `default-src 'none'; img-src ${webview.cspSource} https:; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'unsafe-inline' ${webview.cspSource};`;
+    // Get path to the script file
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'out', 'panels', 'chatView.js'));
+    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'out', 'panels', 'chatView.css'));
+    
     return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="${csp}">
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<style>
-  body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); margin: 0; display: flex; flex-direction: column; height: 100vh; }
-  #toolbar { display:flex; gap:6px; align-items:center; padding:6px; border-bottom: 1px solid var(--vscode-panel-border); }
-  .icon-btn { background: transparent; border: 1px solid var(--vscode-panel-border); border-radius:4px; padding:2px 6px; cursor:pointer; }
-  .icon-btn:hover { background: var(--vscode-editorWidget-background); }
-  .icon-btn img { width:16px; height:16px; display:block; }
-  #tabs { margin-left:auto; font-size:11px; opacity:.85; display:flex; gap:6px; flex-wrap:wrap; }
-  .tab { padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-panel-border); cursor:pointer; display:flex; align-items:center; gap:4px; }
-  .tab.active { background: var(--vscode-editorWidget-background); border-color: var(--vscode-editorWidget-border); }
-  .tab-actions { display:flex; gap:4px; align-items:center; }
-  .tab-btn { 
-    background:transparent; 
-    border:none; 
-    padding:2px; 
-    cursor:pointer; 
-    border-radius:50%; 
-    width:16px; 
-    height:16px; 
-    display:flex; 
-    align-items:center; 
-    justify-content:center;
-    transition: all 0.2s ease;
-  }
-  .tab-btn:hover { 
-    background:rgba(0,0,0,0.1); 
-    transform: scale(1.1);
-  }
-  .tab-btn img { 
-    width:12px; 
-    height:12px; 
-    pointer-events: none;
-  }
-  #messages { flex: 1; overflow: auto; padding: 8px; }
-  .msg { padding: 6px 8px; margin: 6px 0; border-radius: 6px; white-space: pre-wrap; }
-  .user { background: var(--vscode-editor-selectionBackground); }
-  .assistant { background: var(--vscode-editorHoverWidget-background); }
-  .msg-content {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .msg-role {
-    font-weight: 600;
-    color: var(--vscode-textLink-foreground);
-    font-size: 0.9em;
-  }
-  .msg-text {
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-  }
-  .msg-text strong {
-    font-weight: 600;
-    color: var(--vscode-foreground);
-  }
-  .msg-text em {
-    font-style: italic;
-    color: var(--vscode-descriptionForeground);
-  }
-  .msg-text code {
-    background: var(--vscode-textCodeBlock-background);
-    color: var(--vscode-textPreformat-foreground);
-    padding: 2px 4px;
-    border-radius: 3px;
-    font-family: var(--vscode-editor-font-family);
-    font-size: 0.9em;
-  }
-  .msg-text pre {
-    background: var(--vscode-textCodeBlock-background);
-    color: var(--vscode-textPreformat-foreground);
-    padding: 12px;
-    border-radius: 6px;
-    overflow-x: auto;
-    margin: 8px 0;
-    border: 1px solid var(--vscode-panel-border);
-  }
-  .msg-text pre code {
-    background: none;
-    padding: 0;
-    border-radius: 0;
-  }
-  .msg-text h1, .msg-text h2, .msg-text h3 {
-    margin: 12px 0 8px 0;
-    color: var(--vscode-foreground);
-  }
-  .msg-text h1 { font-size: 1.3em; }
-  .msg-text h2 { font-size: 1.2em; }
-  .msg-text h3 { font-size: 1.1em; }
-  .msg-text hr {
-    border: none;
-    border-top: 1px solid var(--vscode-panel-border);
-    margin: 12px 0;
-  }
-  .attached-files {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 4px 0;
-    padding: 6px 8px;
-    background: var(--vscode-editorWidget-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    font-size: 11px;
-  }
-  .attached-file {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 6px;
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border-radius: 3px;
-    font-size: 11px;
-    max-width: 150px;
-  }
-  .attached-file img {
-    width: 12px;
-    height: 12px;
-    object-fit: cover;
-    border-radius: 2px;
-  }
-  .attached-file .file-name {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .attached-file .remove-btn {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    padding: 2px;
-    border-radius: 2px;
-    opacity: 0.7;
-  }
-  .attached-file .remove-btn:hover {
-    opacity: 1;
-    background: rgba(255,255,255,0.1);
-  }
-  .file-preview {
-    max-width: 300px;
-    max-height: 200px;
-    border-radius: 4px;
-    margin: 4px 0;
-    border: 1px solid var(--vscode-panel-border);
-  }
-  .thinking { 
-    background: var(--vscode-editorWidget-background); 
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 8px;
-    margin: 6px 0;
-    padding: 12px;
-    font-style: italic;
-    opacity: 0.8;
-    position: relative;
-  }
-  .thinking-header {
-    font-weight: 600;
-    color: var(--vscode-foreground);
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .thinking-content {
-    color: var(--vscode-descriptionForeground);
-    white-space: pre-wrap;
-    line-height: 1.4;
-  }
-  .thinking-icon {
-    width: 16px;
-    height: 16px;
-    opacity: 0.7;
-  }
-  .loading { display: flex; align-items: center; justify-content: center; padding: 20px; color: var(--vscode-foreground); opacity: 0.7; }
-  .loading-spinner { width: 20px; height: 20px; border: 2px solid var(--vscode-panel-border); border-top: 2px solid var(--vscode-foreground); border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
-  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-  .loading-text { font-size: 12px; }
-  .loading-stop { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border); border-radius: 4px; padding: 4px 8px; margin-left: 12px; cursor: pointer; font-size: 11px; }
-  .loading-stop:hover { background: var(--vscode-button-hoverBackground); }
-  #form { 
-    display: flex; 
-    gap: 8px; 
-    padding: 12px 16px; 
-    border-top: 1px solid var(--vscode-panel-border); 
-    background: var(--vscode-editor-background);
-    align-items: flex-end;
-    transition: all 0.3s ease;
-  }
-  .input-container {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .input-header {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    padding: 0 4px;
-  }
-  #form.loading {
-    background: var(--vscode-editorWidget-background);
-    box-shadow: 0 -2px 8px rgba(0,0,0,0.1);
-  }
-  #prompt { 
-    flex: 1; 
-    padding: 8px 16px;
-    border: 1px solid var(--vscode-input-border);
-    border-radius: 20px;
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    font-size: 14px;
-    outline: none;
-    transition: all 0.2s ease;
-    position: relative;
-    resize: none;
-    min-height: 18px;
-    max-height: 36px;
-    font-family: inherit;
-    line-height: 1.4;
-  }
-  #prompt::placeholder {
-    color: var(--vscode-input-placeholderForeground);
-    transition: opacity 0.2s ease;
-  }
-  #prompt:focus::placeholder {
-    opacity: 0.7;
-  }
-  #prompt:focus { 
-    border-color: var(--vscode-focusBorder);
-    box-shadow: 0 0 0 1px var(--vscode-focusBorder), 0 2px 8px rgba(0,0,0,0.1);
-    transform: translateY(-1px);
-  }
-  #prompt:disabled { 
-    opacity: 0.6; 
-    cursor: not-allowed; 
-    background: var(--vscode-input-background);
-  }
-  #form button[type="submit"], 
-  #form button[type="button"]:not(#file-upload-btn) { 
-    padding: 10px 20px;
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border: 1px solid var(--vscode-button-border);
-    border-radius: 20px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    transition: all 0.2s ease;
-    min-width: 80px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    justify-content: center;
-  }
-  #file-upload-btn {
-    padding: 4px 8px !important;
-    min-width: auto !important;
-    width: auto !important;
-    height: 24px !important;
-    border-radius: 12px !important;
-    background: var(--vscode-button-secondaryBackground) !important;
-    color: var(--vscode-button-secondaryForeground) !important;
-    border: 1px solid var(--vscode-button-secondaryBorder) !important;
-    display: flex !important;
-    align-items: center !important;
-    gap: 4px !important;
-    justify-content: center !important;
-    opacity: 0.7 !important;
-    transition: all 0.2s ease !important;
-    font-size: 11px !important;
-    white-space: nowrap !important;
-    font-weight: normal !important;
-    margin: 0 !important;
-    box-shadow: none !important;
-    text-transform: none !important;
-    letter-spacing: normal !important;
-  }
-  #file-upload-btn:hover:not(:disabled) {
-    background: var(--vscode-button-secondaryHoverBackground) !important;
-    opacity: 1 !important;
-    transform: scale(1.1) !important;
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+      <link rel="stylesheet" href="${styleUri}">
+      <title>OpenAI Agent Chat</title>
+    </head>
+    <body>
+      <div id="app">
+        <div id="header">
+          <div id="thread-selector">
+            <select id="thread-select"></select>
+            <button id="new-thread" title="New Thread">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
+            <button id="rename-thread" title="Rename Thread">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9"></path>
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+              </svg>
+            </button>
+          </div>
+          <div id="permission-stats">
+            <span id="allowed-count">0 allowed</span>, <span id="denied-count">0 denied</span>
+          </div>
+        </div>
+        <div id="messages"></div>
+        <div id="terminal-container" style="display: none;">
+          <div id="terminal-header">
+            <span id="terminal-title">Terminal Output</span>
+            <button id="terminal-close">×</button>
+          </div>
+          <iframe id="terminal-frame" sandbox="allow-scripts" style="width: 100%; height: 200px; border: none;"></iframe>
+        </div>
+        <form id="form">
+          <div id="input-container">
+            <textarea id="prompt" placeholder="Ask a question..." rows="1"></textarea>
+            <button type="button" id="paste-image" title="Paste Image">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+              </svg>
+            </button>
+            <button type="button" id="upload-audio" title="Upload Audio (MP3, MP4)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18V5l12-2v13"></path>
+                <circle cx="6" cy="18" r="3"></circle>
+                <circle cx="18" cy="16" r="3"></circle>
+              </svg>
+            </button>
+            <input type="file" id="audio-file-input" accept=".mp3,.mp4" style="display: none;">
+          </div>
+          <button type="submit">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
+            </svg>
+            Send
+          </button>
+        </form>
+      </div>
+      <script nonce="${nonce}" src="${scriptUri}"></script>
+    </body>
+    </html>`;
   }
   
-  /* Override any inherited button styles */
-  #form #file-upload-btn {
-    padding: 4px 8px !important;
-    min-width: auto !important;
-    width: auto !important;
-    height: 24px !important;
-    border-radius: 12px !important;
-    background: var(--vscode-button-secondaryBackground) !important;
-    color: var(--vscode-button-secondaryForeground) !important;
-    border: 1px solid var(--vscode-button-secondaryBorder) !important;
-    font-size: 11px !important;
-    font-weight: normal !important;
-  }
-  #form button[type="submit"]:hover:not(:disabled),
-  #form button[type="button"]:not(#file-upload-btn):hover:not(:disabled) { 
-    background: var(--vscode-button-hoverBackground);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-  }
-  #form button[type="submit"]:active:not(:disabled),
-  #form button[type="button"]:not(#file-upload-btn):active:not(:disabled) { 
-    transform: translateY(0) scale(0.98);
-  }
-  #form button[type="submit"]:disabled,
-  #form button[type="button"]:not(#file-upload-btn):disabled { 
-    opacity: 0.5; 
-    cursor: not-allowed; 
-    transform: none;
-    box-shadow: none;
-  }
-  #form button[type="submit"].stop {
-    background-color: var(--vscode-errorForeground);
-    border-color: var(--vscode-errorForeground);
-  }
-  #form button[type="submit"].stop:hover {
-    background-color: var(--vscode-errorForeground);
-    opacity: 0.9;
-  }
-  #form button[type="submit"] svg,
-  #form button[type="button"]:not(#file-upload-btn) svg {
-    transition: transform 0.2s ease;
-  }
-  #form button[type="submit"]:hover:not(:disabled) svg,
-  #form button[type="button"]:not(#file-upload-btn):hover:not(:disabled) svg {
-    transform: translateX(2px);
-  }
-  #mode-selector {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    background: var(--vscode-editor-background);
-    border-top: 1px solid var(--vscode-panel-border);
-    font-size: 12px;
-    color: var(--vscode-foreground);
-  }
-  #mode-selector label {
-    font-weight: 500;
-    color: var(--vscode-descriptionForeground);
-  }
-  #mode-select {
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border);
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 12px;
-    outline: none;
-    transition: all 0.2s ease;
-  }
-  #mode-select:focus {
-    border-color: var(--vscode-focusBorder);
-    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
-  }
-  #mode-select:hover {
-    border-color: var(--vscode-input-border);
-  }
-  #model-select {
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border);
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 12px;
-    outline: none;
-    transition: all 0.2s ease;
-  }
-  #model-select:focus {
-    border-color: var(--vscode-focusBorder);
-    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
-  }
-  #model-select:hover {
-    border-color: var(--vscode-input-border);
-  }
-  .cost-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 8px;
-    background: var(--vscode-editorWidget-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    font-size: 11px;
-    color: var(--vscode-descriptionForeground);
-    margin: 4px 0;
-  }
-  .cost-info .cost-label {
-    font-weight: 500;
-    color: var(--vscode-foreground);
-  }
-  .cost-info .cost-value {
-    color: var(--vscode-textLink-foreground);
-    font-weight: 600;
-  }
-  .cost-info .tokens-info {
-    color: var(--vscode-descriptionForeground);
-    font-size: 10px;
-  }
-  .cost-info .reset-btn {
-    background: transparent;
-    border: 1px solid var(--vscode-panel-border);
-    color: var(--vscode-foreground);
-    border-radius: 3px;
-    padding: 2px 6px;
-    cursor: pointer;
-    font-size: 10px;
-    transition: all 0.2s ease;
-  }
-  .cost-info .reset-btn:hover {
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-  }
-  .paste-hint {
-    font-size: 10px;
-    color: var(--vscode-descriptionForeground);
-    opacity: 0.7;
-    text-align: center;
-    margin-top: 4px;
-    padding: 2px 8px;
-  }
-  .paste-hint:hover {
-    opacity: 1;
-  }
-  .permission-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 8px;
-    background: var(--vscode-editorWidget-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    font-size: 11px;
-    color: var(--vscode-descriptionForeground);
-    margin: 4px 0;
-  }
-  .permission-info .permission-label {
-    font-weight: 500;
-    color: var(--vscode-foreground);
-  }
-  .permission-info .permission-stats {
-    color: var(--vscode-textLink-foreground);
-    font-weight: 600;
-  }
-  .permission-btn {
-    background: transparent;
-    border: 1px solid var(--vscode-panel-border);
-    color: var(--vscode-foreground);
-    border-radius: 3px;
-    padding: 2px 6px;
-    cursor: pointer;
-    font-size: 10px;
-    transition: all 0.2s ease;
-  }
-  .permission-btn:hover {
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-  }
-  .permission-request {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--vscode-editorWidget-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 1000;
-    min-width: 300px;
-    max-width: 500px;
-  }
-  .permission-content {
-    padding: 16px;
-  }
-  .permission-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--vscode-foreground);
-    margin-bottom: 8px;
-  }
-  .permission-description {
-    font-size: 12px;
-    color: var(--vscode-descriptionForeground);
-    margin-bottom: 16px;
-    line-height: 1.4;
-  }
-  .permission-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-  }
-  .permission-actions .permission-btn {
-    padding: 6px 12px;
-    font-size: 11px;
-  }
-  .permission-actions .permission-btn.allow {
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border-color: var(--vscode-button-background);
-  }
-  .permission-actions .permission-btn.deny {
-    background: var(--vscode-errorBackground);
-    color: var(--vscode-errorForeground);
-    border-color: var(--vscode-errorForeground);
-  }
-  .permission-actions .permission-btn.remember {
-    background: var(--vscode-textLink-foreground);
-    color: var(--vscode-editor-background);
-    border-color: var(--vscode-textLink-foreground);
-  }
-
-  /* Stream output styles */
-  .stream-output {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 500px;
-    max-height: 400px;
-    background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .stream-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 16px;
-    background: var(--vscode-panel-background);
-    border-bottom: 1px solid var(--vscode-panel-border);
-    border-radius: 8px 8px 0 0;
-  }
-
-  .stream-title {
-    font-weight: 600;
-    color: var(--vscode-foreground);
-  }
-
-  .stream-close {
-    background: none;
-    border: none;
-    color: var(--vscode-foreground);
-    font-size: 18px;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-  }
-
-  .stream-close:hover {
-    background: var(--vscode-toolbar-hoverBackground);
-  }
-
-  .stream-content {
-    padding: 12px 16px;
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--vscode-foreground);
-    background: var(--vscode-editor-background);
-    border-radius: 0 0 8px 8px;
-    max-height: 300px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .stream-line {
-    margin: 2px 0;
-  }
-
-  .stream-line.error {
-    color: var(--vscode-errorForeground);
-  }
-
-  .stream-line.success {
-    color: var(--vscode-terminal-ansiGreen);
-  }
-
-  /* Terminal output styles */
-  .terminal-output {
-    position: fixed;
-    bottom: 20px;
-    left: 20px;
-    width: 600px;
-    max-height: 400px;
-    background: var(--vscode-terminal-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .terminal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 16px;
-    background: var(--vscode-terminal-background);
-    border-bottom: 1px solid var(--vscode-panel-border);
-    border-radius: 8px 8px 0 0;
-  }
-
-  .terminal-title {
-    font-weight: 600;
-    color: var(--vscode-terminal-foreground);
-    font-family: 'Courier New', monospace;
-  }
-
-  .terminal-close {
-    background: none;
-    border: none;
-    color: var(--vscode-terminal-foreground);
-    font-size: 18px;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-  }
-
-  .terminal-close:hover {
-    background: var(--vscode-toolbar-hoverBackground);
-  }
-
-  .terminal-content {
-    padding: 12px 16px;
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--vscode-terminal-foreground);
-    background: var(--vscode-terminal-background);
-    border-radius: 0 0 8px 8px;
-    max-height: 300px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .terminal-line {
-    margin: 2px 0;
-  }
-
-  .terminal-line.command {
-    color: var(--vscode-terminal-ansiGreen);
-    font-weight: bold;
-  }
-
-  .terminal-line.output {
-    color: var(--vscode-terminal-foreground);
-  }
-
-  .terminal-line.error {
-    color: var(--vscode-terminal-ansiRed);
-  }
-
-  .terminal-line.success {
-    color: var(--vscode-terminal-ansiGreen);
-  }
-</style>
-</head>
-<body>
-  <div id="toolbar">
-    <button id="new" class="icon-btn" title="New"><img src="${addIcon}" alt="+"/></button>
-    <div id="tabs"></div>
-  </div>
-  <div id="messages"></div>
-  <div id="cost-info" class="cost-info" style="display: none;">
-    <span class="cost-label">Session Cost:</span>
-    <span class="cost-value" id="session-cost">$0.00</span>
-    <span class="tokens-info" id="tokens-info"></span>
-    <button class="reset-btn" id="reset-cost">Reset</button>
-    <span class="tokens-info" style="font-size: 9px; opacity: 0.7;">*Prices based on OpenAI API pricing</span>
-  </div>
-  <div id="permission-info" class="permission-info" style="display: none;">
-    <span class="permission-label">Permissions:</span>
-    <span class="permission-stats" id="permission-stats">0 allowed, 0 denied</span>
-    <button class="permission-btn" id="permission-manage">Manage</button>
-    <button class="permission-btn" id="permission-auto">Auto-approve</button>
-  </div>
-  <div id="permission-request" class="permission-request" style="display: none;">
-    <div class="permission-content">
-      <div class="permission-title">Permission Request</div>
-      <div class="permission-description" id="permission-description"></div>
-      <div class="permission-actions">
-        <button class="permission-btn allow" id="permission-allow">Allow</button>
-        <button class="permission-btn deny" id="permission-deny">Deny</button>
-        <button class="permission-btn remember" id="permission-remember">Allow & Remember</button>
-      </div>
-    </div>
-  </div>
-  <div id="stream-output" class="stream-output" style="display: none;">
-    <div class="stream-header">
-      <span class="stream-title">Command Output</span>
-      <button class="stream-close" id="stream-close">×</button>
-    </div>
-    <div class="stream-content" id="stream-content"></div>
-  </div>
-  <div id="terminal-output" class="terminal-output" style="display: none;">
-    <div class="terminal-header">
-      <span class="terminal-title">Terminal</span>
-      <button class="terminal-close" id="terminal-close">×</button>
-    </div>
-    <div class="terminal-content">
-      <iframe id="terminal-iframe" style="width: 100%; height: 300px; border: none;" src="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'out', 'panels', 'terminal.html'))}"></iframe>
-    </div>
-  </div>
-  <form id="form">
-    <div class="input-container">
-      <div class="input-header">
-        <button type="button" id="file-upload-btn" title="Add file">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.64 16.2a2 2 0 0 1-2.83-2.83l8.49-8.49"></path>
-          </svg>
-          <span>Add file</span>
-        </button>
-        <input type="file" id="file-input" multiple accept="image/*,.txt,.md,.js,.ts,.py,.json,.xml,.csv,.pdf" style="display: none;">
-      </div>
-      <textarea id="prompt" placeholder="Ask the OpenAI Agent... (Ctrl+Enter for new line, Enter to send, Ctrl+V to paste images)" rows="1"></textarea>
-    </div>
-    <button type="submit">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="22" y1="2" x2="11" y2="13"></line>
-        <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
-      </svg>
-      Send
-    </button>
-  </form>
-  <div id="mode-selector">
-    <label for="mode-select">Mode:</label>
-    <select id="mode-select">
-      <option value="agent">🤖 Agent (Auto-suggestions)</option>
-      <option value="ask">❓ Ask (Manual questions)</option>
-    </select>
-    <label for="model-select">Model:</label>
-    <select id="model-select">
-      <option value="gpt-4o">GPT-4o</option>
-      <option value="gpt-4o-mini">GPT-4o Mini</option>
-      <option value="gpt-4-turbo">GPT-4 Turbo</option>
-      <option value="gpt-4-turbo-preview">GPT-4 Turbo Preview</option>
-      <option value="gpt-4">GPT-4</option>
-      <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-    </select>
-  </div>
-  <div class="paste-hint">
-    💡 Tip: You can paste images directly with Ctrl+V
-  </div>
-  <script src="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'out', 'panels', 'chatView.js'))}"></script>
-</body>
-</html>`;
+  private getNonce(): string {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+      text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
   }
 }

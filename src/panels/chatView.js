@@ -13,6 +13,8 @@
   const modeSelect = document.getElementById('mode-select');
   const modelSelect = document.getElementById('model-select');
   const submitButton = form.querySelector('button[type="submit"]');
+  const uploadAudioButton = document.getElementById('upload-audio');
+  const audioFileInput = document.getElementById('audio-file-input');
   
   console.log('Submit button found:', submitButton ? 'Yes' : 'No');
   
@@ -331,4 +333,45 @@
       form.dispatchEvent(new Event('submit'));
     }
   });
+
+  // Обработка загрузки аудиофайлов
+  if (uploadAudioButton && audioFileInput) {
+    uploadAudioButton.addEventListener('click', () => {
+      audioFileInput.click();
+    });
+
+    audioFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        // Проверяем тип файла
+        const allowedTypes = ['audio/mp3', 'audio/mpeg', 'audio/mp4', 'video/mp4'];
+        if (!allowedTypes.includes(file.type)) {
+          alert('Пожалуйста, выберите MP3 или MP4 файл');
+          return;
+        }
+
+        // Проверяем размер файла (максимум 25MB для OpenAI)
+        const maxSize = 25 * 1024 * 1024; // 25MB
+        if (file.size > maxSize) {
+          alert('Размер файла не должен превышать 25MB');
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const audioData = event.target.result.split(',')[1]; // Убираем data:audio/mp3;base64,
+          vscode.postMessage({
+            type: 'uploadAudio',
+            audioData: audioData,
+            filename: file.name,
+            description: `Uploaded ${file.name}`
+          });
+        };
+        reader.readAsDataURL(file);
+        
+        // Очищаем input для возможности повторной загрузки того же файла
+        e.target.value = '';
+      }
+    });
+  }
 })();

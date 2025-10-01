@@ -1,15 +1,15 @@
 import * as vscode from 'vscode';
-import { OpenAIService } from './openAIService';
+import { OpenAIServiceInterface } from './openAIServiceInterface';
 import { EditorService } from './editorService';
 
 export class SuggestionService implements vscode.CompletionItemProvider {
   private mode: "agent" | "ask" = "agent";
-  private openAIService: OpenAIService;
+  private openAIService: OpenAIServiceInterface;
   private editorService: EditorService;
   private isProcessing: boolean = false;
   private statusBarItem: vscode.StatusBarItem;
   
-  constructor(openAIService: OpenAIService, editorService: EditorService) {
+  constructor(openAIService: OpenAIServiceInterface, editorService: EditorService) {
     this.openAIService = openAIService;
     this.editorService = editorService;
     
@@ -99,27 +99,31 @@ export class SuggestionService implements vscode.CompletionItemProvider {
             self.statusBarItem.text = "$(sync~spin) AI Thinking...";
             
             // Get context to provide to OpenAI
-            const contextBeforeCursor = self.editorService.getContextBeforeCursor(30);
+            const contextBeforeCursor = self.editorService.getContextBeforeCursor(50);
             
+            // Only generate suggestions for files with some content
             if (!contextBeforeCursor.trim()) {
               return null;
             }
             
+            // Get file language
+            const languageId = document.languageId;
+            
             // Get completion from OpenAI
-            const completion = await self.openAIService.getCompletion(
-              contextBeforeCursor,
-              document.languageId
-            );
+            const completion = await self.openAIService.getCompletion(contextBeforeCursor, languageId);
             
             if (!completion) {
               return null;
             }
             
-            return [new vscode.InlineCompletionItem(
+            // Create inline completion item
+            const item = new vscode.InlineCompletionItem(
               completion,
               new vscode.Range(position, position)
-            )];
-          } catch (error: any) {
+            );
+            
+            return [item];
+          } catch (error) {
             console.error('Error generating inline suggestions:', error);
             return null;
           } finally {
@@ -131,58 +135,63 @@ export class SuggestionService implements vscode.CompletionItemProvider {
     );
   }
   
-  public dispose() {
-    this.statusBarItem.dispose();
+  public setMode(mode: "agent" | "ask"): void {
+    this.mode = mode;
+  }
+  
+  public async askAtCursor(): Promise<void> {
+    if (this.isProcessing) {
+      vscode.window.showInformationMessage('Already processing a request, please wait...');
+      return;
+    }
+    
+    try {
+      this.isProcessing = true;
+      this.statusBarItem.text = "$(sync~spin) AI Thinking...";
+      
+      // Get the current document and selection
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor');
+        return;
+      }
+      
+      // Get the selected text or current line
+      let selectedText = editor.document.getText(editor.selection);
+      if (!selectedText) {
+        // If no text is selected, get the current line
+        const line = editor.document.lineAt(editor.selection.active.line);
+        selectedText = line.text;
+      }
+      
+      // Get surrounding context
+      const surroundingContext = this.editorService.getSurroundingContext(100);
+      
+      // Combine selected text and context
+      const prompt = `I'm working on this code:\n\n${surroundingContext}\n\nFocus on this specific part:\n\n${selectedText}\n\nPlease explain what this code does and suggest any improvements.`;
+      
+      // Show panel view
+      await vscode.commands.executeCommand('vscode-openai-agent.showPanel');
+      
+      // Send to OpenAI
+      await this.openAIService.chat(prompt);
+    } catch (error: any) {
+      console.error('Error asking about code:', error);
+      vscode.window.showErrorMessage(`Error asking about code: ${error.message}`);
+    } finally {
+      this.isProcessing = false;
+      this.statusBarItem.text = "$(sparkle) AI Ready";
+    }
   }
   
   public async resetAssistantThread(): Promise<void> {
     try {
-      await this.openAIService.resetThread();
-      vscode.window.showInformationMessage('OpenAI Agent context has been reset');
+      const newThreadId = await this.openAIService.newThread();
+      vscode.window.showInformationMessage('Started a new conversation with OpenAI Assistant');
+      return;
     } catch (error: any) {
-      vscode.window.showErrorMessage(`Failed to reset context: ${error.message}`);
+      console.error('Error resetting assistant thread:', error);
+      vscode.window.showErrorMessage(`Error resetting assistant: ${error.message}`);
     }
-  }
-  public setMode(mode: "agent" | "ask") {
-    this.mode = mode;
-    this.statusBarItem.text = this.mode === 'agent' ? '$(sparkle) AI Ready' : '$(comment-discussion) Ask Mode';
-  }
-
-  public async askAtCursor(): Promise<void> {
-    const doc = this.editorService.getCurrentDocument();
-    if (!doc) return;
-    
-    // Get context around cursor
-    const before = this.editorService.getContextBeforeCursor(30);
-    const after = this.editorService.getContextAfterCursor(10);
-    const selectedText = this.editorService.getSelectedText();
-    
-    // Build context message
-    let contextMessage = `Here's the code context around my cursor:\n\n`;
-    contextMessage += `**File:** ${doc.fileName}\n`;
-    contextMessage += `**Language:** ${doc.languageId}\n\n`;
-    
-    if (selectedText.trim()) {
-      contextMessage += `**Selected code:**\n\`\`\`${doc.languageId}\n${selectedText}\n\`\`\`\n\n`;
-    }
-    
-    contextMessage += `**Code before cursor:**\n\`\`\`${doc.languageId}\n${before}\n\`\`\`\n\n`;
-    
-    if (after.trim()) {
-      contextMessage += `**Code after cursor:**\n\`\`\`${doc.languageId}\n${after}\n\`\`\`\n\n`;
-    }
-    
-    contextMessage += `Please help me with this code.`;
-    
-    // Show the chat panel and send the context
-    await vscode.commands.executeCommand('openaiAgent.chatView.focus');
-    
-    // Send the context to the chat panel
-    setTimeout(() => {
-      vscode.commands.executeCommand('workbench.action.webview.postMessage', 'openaiAgent.chatView', {
-        type: 'sendPrompt',
-        prompt: contextMessage
-      });
-    }, 500);
   }
 }
