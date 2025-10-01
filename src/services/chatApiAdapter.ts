@@ -75,6 +75,14 @@ export class ChatApiAdapter implements OpenAIServiceInterface {
     return this.openAIChatService.setThreadName(threadId, name);
   }
 
+  async deleteThread(threadId: string): Promise<void> {
+    return this.openAIChatService.deleteThread(threadId);
+  }
+
+  async getThreads(): Promise<string[]> {
+    return this.openAIChatService.getThreads();
+  }
+
   async cancelCurrentRun(): Promise<void> {
     // No runs to cancel in Chat Completions API
     return Promise.resolve();
@@ -94,6 +102,10 @@ export class ChatApiAdapter implements OpenAIServiceInterface {
 
   async addAudio(audioData: Buffer, filename: string, description: string): Promise<string> {
     return this.openAIChatService.addAudio(audioData, filename, description);
+  }
+
+  async transcribeAudio(audioData: Buffer, filename: string, language?: string, onProgress?: (progress: number) => void): Promise<string> {
+    return this.openAIChatService.transcribeAudio(audioData, filename, language, onProgress);
   }
 
   async addDecision(decision: { title: string; description: string; reasoning: string; tags: string[] }): Promise<void> {

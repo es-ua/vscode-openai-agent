@@ -11,7 +11,27 @@ export class McpClient {
     if (this.proc) return;
     // Find the extension directory and use the MCP server from there
     const extensionDir = path.dirname(__dirname);
-    const serverPath = path.join(extensionDir, '..', 'mcp-server', 'server.js');
+    
+    // Try different possible paths for the MCP server
+    let serverPath = path.join(extensionDir, '..', '..', 'mcp-server', 'server.js');
+    
+    // Check if the server exists at this path, if not try alternative paths
+    const fs = require('fs');
+    if (!fs.existsSync(serverPath)) {
+      // Try relative to current working directory
+      serverPath = path.join(process.cwd(), 'mcp-server', 'server.js');
+    }
+    
+    if (!fs.existsSync(serverPath)) {
+      // Try relative to extension directory
+      serverPath = path.join(extensionDir, '..', 'mcp-server', 'server.js');
+    }
+    
+    if (!fs.existsSync(serverPath)) {
+      throw new Error(`MCP server not found. Tried paths: ${serverPath}`);
+    }
+    
+    console.log('Starting MCP server from:', serverPath);
     const proc = spawn(process.execPath, [serverPath], {
       env: { ...process.env, WORKSPACE_DIR: workspaceDir },
       stdio: ['pipe', 'pipe', 'inherit']

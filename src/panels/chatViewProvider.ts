@@ -28,6 +28,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
     this._view = webviewView;
+    
+    // Получаем настройку языка транскрипции
+    const config = vscode.workspace.getConfiguration('openaiAgent');
+    const transcriptionLanguage = config.get<string>('audio.transcriptionLanguage', '');
+    webviewView.webview.postMessage({ 
+      type: 'setTranscriptionLanguage', 
+      language: transcriptionLanguage 
+    });
     this.openAI.setView(webviewView);
     
     // Get permission service after OpenAIService is initialized
@@ -106,24 +114,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       console.log('Received message from webview:', msg.type);
       
       if (msg.type === 'sendPrompt') {
-        if (this.isProcessing) {
-          webviewView.webview.postMessage({ type: 'error', message: 'Already processing a request, please wait...' });
-          return;
-        }
-        
-        this.isProcessing = true;
+        // Убираем проверку isProcessing - позволяем множественные запросы
         webviewView.webview.postMessage({ type: 'thinking', content: 'Thinking...' });
         
         try {
           const response = await this.openAI.chat(msg.prompt, (step) => {
             webviewView.webview.postMessage({ type: 'updateThinking', content: step });
           });
-          console.log('Chat response received');
+          console.log('Chat response received:', response);
+          // Отправляем ответ AI в webview
+          webviewView.webview.postMessage({ type: 'append', role: 'assistant', content: response });
         } catch (error: any) {
           console.error('Error in chat:', error);
           webviewView.webview.postMessage({ type: 'error', message: error.message });
-        } finally {
-          this.isProcessing = false;
         }
       } else if (msg.type === 'newThread') {
         try {
@@ -149,6 +152,60 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           postThreads();
         } catch (error: any) {
           console.error('Error renaming thread:', error);
+          webviewView.webview.postMessage({ type: 'error', message: error.message });
+        }
+      } else if (msg.type === 'deleteThread') {
+        try {
+          await this.openAI.deleteThread(msg.threadId);
+          postThreads();
+          // If we deleted the current thread, create a new one
+          const threads = await this.openAI.getThreads();
+          if (threads.length === 0) {
+            await this.openAI.newThread();
+            postThreads();
+          }
+        } catch (error: any) {
+          console.error('Error deleting thread:', error);
+          webviewView.webview.postMessage({ type: 'error', message: error.message });
+        }
+      } else if (msg.type === 'showInputBox') {
+        try {
+          const input = await vscode.window.showInputBox({
+            prompt: msg.prompt,
+            value: msg.value || '',
+            placeHolder: 'Enter text...'
+          });
+          
+          if (input !== undefined) {
+            if (msg.callbackType === 'renameThread') {
+              await this.openAI.setThreadName(msg.threadId, input);
+              postThreads();
+            }
+          }
+        } catch (error: any) {
+          console.error('Error in input box:', error);
+          webviewView.webview.postMessage({ type: 'error', message: error.message });
+        }
+      } else if (msg.type === 'showConfirmDialog') {
+        try {
+          const result = await vscode.window.showWarningMessage(
+            msg.message,
+            { modal: true },
+            'Delete'
+          );
+          
+          if (result === 'Delete' && msg.callbackType === 'deleteThread') {
+            await this.openAI.deleteThread(msg.threadId);
+            postThreads();
+            // If we deleted the current thread, create a new one
+            const threads = await this.openAI.getThreads();
+            if (threads.length === 0) {
+              await this.openAI.newThread();
+              postThreads();
+            }
+          }
+        } catch (error: any) {
+          console.error('Error in confirm dialog:', error);
           webviewView.webview.postMessage({ type: 'error', message: error.message });
         }
       } else if (msg.type === 'handlePermissionResponse') {
@@ -196,6 +253,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           console.error('Error processing audio:', error);
           webviewView.webview.postMessage({ type: 'error', message: `Error processing audio: ${error.message}` });
         }
+      } else if (msg.type === 'transcribeAudio') {
+        try {
+          // Handle audio transcription with progress
+          const audioData = Buffer.from(msg.audioData, 'base64');
+          const transcription = await this.openAI.transcribeAudio(
+            audioData, 
+            msg.filename, 
+            msg.language,
+            (progress: number) => {
+              // Send progress updates to webview
+              webviewView.webview.postMessage({ 
+                type: 'transcriptionProgress', 
+                progress: progress,
+                filename: msg.filename
+              });
+            }
+          );
+          webviewView.webview.postMessage({ 
+            type: 'append', 
+            role: 'user', 
+            content: `[Audio Transcription: ${msg.filename}]\n${transcription}` 
+          });
+        } catch (error: any) {
+          console.error('Error transcribing audio:', error);
+          webviewView.webview.postMessage({ type: 'error', message: `Error transcribing audio: ${error.message}` });
+        }
       }
     });
   }
@@ -234,18 +317,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
               </svg>
             </button>
+            <button id="delete-thread" title="Delete Thread">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3,6 5,6 21,6"></polyline>
+                <path d="M19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
+              </svg>
+            </button>
           </div>
           <div id="permission-stats">
             <span id="allowed-count">0 allowed</span>, <span id="denied-count">0 denied</span>
           </div>
         </div>
         <div id="messages"></div>
+        <div id="transcription-progress" style="display: none;">
+          <div id="transcription-progress-content">
+            <div id="transcription-progress-icon">🎤</div>
+            <div id="transcription-progress-text">Processing audio with Whisper AI...</div>
+            <div id="transcription-progress-filename"></div>
+            <div id="transcription-progress-bar">
+              <div id="transcription-progress-fill"></div>
+            </div>
+            <div id="transcription-progress-percent">0%</div>
+          </div>
+        </div>
         <div id="terminal-container" style="display: none;">
           <div id="terminal-header">
             <span id="terminal-title">Terminal Output</span>
             <button id="terminal-close">×</button>
           </div>
           <iframe id="terminal-frame" sandbox="allow-scripts" style="width: 100%; height: 200px; border: none;"></iframe>
+        </div>
+        <div id="drag-drop-overlay" style="display: none;">
+          <div id="drag-drop-content">
+            <div id="drag-drop-icon">🎵</div>
+            <div id="drag-drop-text">Перетащите аудиофайл сюда для загрузки</div>
+            <div id="drag-drop-subtext">(MP3, MP4, M4A)</div>
+            <div id="drag-drop-icon">🎤</div>
+            <div id="drag-drop-text">Перетащите аудиофайл сюда для транскрипции</div>
+            <div id="drag-drop-subtext">(MP3, MP4, M4A)</div>
+          </div>
         </div>
         <form id="form">
           <div id="input-container">
@@ -257,14 +369,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 <polyline points="21 15 16 10 5 21"></polyline>
               </svg>
             </button>
-            <button type="button" id="upload-audio" title="Upload Audio (MP3, MP4)">
+            <button type="button" id="upload-audio" title="Upload Audio (MP3, MP4, M4A)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 18V5l12-2v13"></path>
                 <circle cx="6" cy="18" r="3"></circle>
                 <circle cx="18" cy="16" r="3"></circle>
               </svg>
             </button>
-            <input type="file" id="audio-file-input" accept=".mp3,.mp4" style="display: none;">
+            <button type="button" id="transcribe-audio" title="Transcribe Audio (MP3, MP4, M4A)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+              </svg>
+            </button>
+            <input type="file" id="audio-file-input" accept=".mp3,.mp4,.m4a" style="display: none;">
+            <input type="file" id="transcribe-file-input" accept=".mp3,.mp4,.m4a" style="display: none;">
           </div>
           <button type="submit">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

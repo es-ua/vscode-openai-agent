@@ -10,6 +10,8 @@ export interface OpenAIServiceInterface {
   getThreadHistory(threadId: string): Promise<any[]>;
   setActiveThread(threadId: string): Promise<void>;
   setThreadName(threadId: string, name: string): Promise<void>;
+  deleteThread(threadId: string): Promise<void>;
+  getThreads(): Promise<string[]>;
   cancelCurrentRun(): Promise<void>;
   getPermissionService(): PermissionService;
   getCompletion(context: string, language: string): Promise<string | null>;
@@ -19,4 +21,5 @@ export interface OpenAIServiceInterface {
   getRelevantDecisions(query: string): Promise<any[]>;
   addImage(imageData: Buffer, description: string): Promise<string>;
   addAudio(audioData: Buffer, filename: string, description: string): Promise<string>;
+  transcribeAudio(audioData: Buffer, filename: string, language?: string, onProgress?: (progress: number) => void): Promise<string>;
 }

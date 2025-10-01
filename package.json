@@ -218,12 +218,19 @@
             "audio/mp3",
             "audio/mpeg",
             "audio/mp4",
-            "video/mp4"
+            "video/mp4",
+            "audio/m4a",
+            "audio/x-m4a"
           ],
           "description": "Allowed audio file MIME types",
           "items": {
             "type": "string"
           }
+        },
+        "openaiAgent.audio.transcriptionLanguage": {
+          "type": "string",
+          "default": "",
+          "description": "Default language for audio transcription (e.g., 'ru', 'en', 'es'). Leave empty for auto-detection"
         }
       }
     },
@@ -329,7 +336,8 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "axios": "^1.6.2"
+    "axios": "^1.6.2",
+    "form-data": "^4.0.0"
   },
   "extensionDependencies": [],
   "bundleDependencies": false

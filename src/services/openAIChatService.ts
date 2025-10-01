@@ -155,6 +155,36 @@ export class OpenAIChatService {
     }
   }
 
+  async deleteThread(threadId: string): Promise<void> {
+    if (this.threads.has(threadId)) {
+      this.threads.delete(threadId);
+      
+      // Delete the thread file
+      const threadFile = path.join(this.storageDir, '.vscode', 'openai-agent', 'threads', `${threadId}.json`);
+      try {
+        await fs.promises.unlink(threadFile);
+      } catch (error) {
+        console.warn(`Could not delete thread file: ${threadFile}`, error);
+      }
+      
+      // If this was the active thread, switch to another one
+      if (this.currentThread?.id === threadId) {
+        const remainingThreads = Array.from(this.threads.keys());
+        if (remainingThreads.length > 0) {
+          this.currentThread = this.threads.get(remainingThreads[0]);
+        } else {
+          this.currentThread = undefined;
+        }
+      }
+      
+      console.log(`Thread ${threadId} deleted`);
+    }
+  }
+
+  async getThreads(): Promise<string[]> {
+    return Array.from(this.threads.keys());
+  }
+
   async chat(prompt: string, onThinking?: (step: string) => void): Promise<string> {
     try {
       const thread = await this.getCurrentThread();
@@ -235,6 +265,82 @@ export class OpenAIChatService {
     return audioId;
   }
 
+  async transcribeAudio(audioData: Buffer, filename: string, language?: string, onProgress?: (progress: number) => void): Promise<string> {
+    try {
+      // Create a temporary file for the audio data
+      const tempDir = path.join(this.storageDir, '.vscode', 'openai-agent', 'temp');
+      await fs.promises.mkdir(tempDir, { recursive: true });
+      
+      const tempFilePath = path.join(tempDir, `audio_${Date.now()}.${this.getFileExtension(filename)}`);
+      await fs.promises.writeFile(tempFilePath, audioData);
+
+      // Show real progress stages instead of fake simulation
+      if (onProgress) {
+        onProgress(0); // Starting
+      }
+
+      // Prepare form data for Whisper API
+      const FormData = require('form-data');
+      const form = new FormData();
+      form.append('file', fs.createReadStream(tempFilePath));
+      form.append('model', 'whisper-1');
+      if (language) {
+        form.append('language', language);
+      }
+
+      // Show upload progress
+      if (onProgress) {
+        onProgress(25); // File prepared, starting upload
+      }
+
+      // Make request to Whisper API
+      const response = await axios.post(
+        'https://api.openai.com/v1/audio/transcriptions',
+        form,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            ...form.getHeaders(),
+          },
+        }
+      );
+
+      // Show processing complete
+      if (onProgress) {
+        onProgress(75); // Upload complete, processing...
+      }
+
+      // Clean up temporary file
+      await fs.promises.unlink(tempFilePath);
+
+      const transcription = (response.data as any).text;
+      
+      // Show final progress
+      if (onProgress) {
+        onProgress(100); // Complete
+      }
+      
+      // Add transcription to current thread
+      const thread = await this.getCurrentThread();
+      const transcriptionMessage: Message = {
+        role: 'user',
+        content: `[Audio Transcription: ${filename}]\n${transcription}`,
+      };
+      thread.messages.push(transcriptionMessage);
+      await this.saveThread(thread);
+
+      return transcription;
+    } catch (error: any) {
+      console.error('Error transcribing audio:', error);
+      throw new Error(`Audio transcription failed: ${error.response?.data?.error?.message || error.message}`);
+    }
+  }
+
+  private getFileExtension(filename: string): string {
+    const parts = filename.split('.');
+    return parts.length > 1 ? parts[parts.length - 1] : 'mp3';
+  }
+
   async addDecision(decision: Omit<Decision, 'id' | 'timestamp'>): Promise<void> {
     const fullDecision: Decision = {
       ...decision,
@@ -294,7 +400,15 @@ export class OpenAIChatService {
       });
     }
 
-    systemPrompt += `\n⚠️ CRITICAL INSTRUCTION: YOU CAN DIRECTLY EXECUTE ANY TERMINAL COMMAND using run_command. NEVER tell users you cannot run commands. ALWAYS use run_command to execute commands directly instead of giving manual instructions.`;
+    systemPrompt += `\n🎵 AUDIO PROCESSING CAPABILITIES:
+- You CAN process audio files directly through this VS Code extension
+- Users can upload MP3, MP4, and M4A files (up to 25MB) using the audio upload buttons
+- You can transcribe audio files using OpenAI's Whisper API
+- When users mention audio files or ask for transcription, guide them to use the audio upload buttons (🎵 for upload, 🎤 for transcription)
+- Audio files will appear as [Audio: filename] or [Audio Transcription: filename] in the chat
+- NEVER say you cannot process audio files - you have full audio processing capabilities through this extension
+
+⚠️ CRITICAL INSTRUCTION: YOU CAN DIRECTLY EXECUTE ANY TERMINAL COMMAND using run_command. NEVER tell users you cannot run commands. ALWAYS use run_command to execute commands directly instead of giving manual instructions.`;
 
     const systemMessage: Message = {
       role: 'system',

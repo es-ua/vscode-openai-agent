@@ -240,3 +240,219 @@ button[type="submit"].stop:hover:not(:disabled) {
 #messages::-webkit-scrollbar-thumb:hover {
   background: var(--vscode-scrollbarSlider-activeBackground);
 }
+
+/* Audio Attachments */
+.audio-attachment {
+  background-color: var(--vscode-panel-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.audio-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.audio-icon {
+  font-size: 16px;
+}
+
+.audio-filename {
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  flex: 1;
+}
+
+.audio-type {
+  background-color: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.audio-transcription {
+  background-color: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 4px;
+  padding: 8px;
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family);
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+/* Drag & Drop Overlay */
+#drag-drop-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: none;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+#drag-drop-content {
+  background-color: var(--vscode-panel-background);
+  border: 2px dashed var(--vscode-focusBorder);
+  border-radius: 12px;
+  padding: 40px;
+  text-align: center;
+  max-width: 400px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+#drag-drop-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  display: inline-block;
+  padding: 8px;
+  border-radius: 8px;
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  margin: 8px;
+}
+
+#drag-drop-icon:hover {
+  transform: scale(1.1);
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+#drag-drop-text {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--vscode-foreground);
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+#drag-drop-subtext {
+  font-size: 14px;
+  color: var(--vscode-descriptionForeground);
+  margin: 16px 0;
+}
+
+/* Drag & Drop Animation */
+@keyframes dragPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+#drag-drop-overlay.show {
+  animation: dragPulse 0.5s ease-in-out;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  #input-container {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  #input-container textarea {
+    width: 100%;
+  }
+  
+  #input-container button {
+    width: 100%;
+  }
+  
+  #drag-drop-content {
+    margin: 20px;
+    padding: 30px 20px;
+  }
+  
+  #drag-drop-icon {
+    font-size: 36px;
+  }
+  
+  #drag-drop-text {
+    font-size: 16px;
+  }
+}
+
+/* Transcription Progress Styles */
+#transcription-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background-color: var(--vscode-panel-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  z-index: 1000;
+  padding: 12px;
+}
+
+#transcription-progress-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+#transcription-progress-icon {
+  font-size: 24px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+#transcription-progress-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--vscode-editor-foreground);
+}
+
+#transcription-progress-filename {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+  word-break: break-all;
+}
+
+#transcription-progress-bar {
+  width: 100%;
+  height: 8px;
+  background-color: var(--vscode-progressBar-background);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+#transcription-progress-fill {
+  height: 100%;
+  background-color: var(--vscode-progressBar-foreground);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+#transcription-progress-percent {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  font-weight: 500;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
